@@ -100,9 +100,11 @@ fun KeyboardScreen(
     var isShifted by remember { mutableStateOf(false) }
     var isSymbolsMode by remember { mutableStateOf(false) }
 
-    val triggerHaptic = remember(view) {
+    // 明確宣告為 () -> Unit，避免 performHapticFeedback 回傳 Boolean 導致型別推斷為 () -> Boolean
+    val triggerHaptic: () -> Unit = remember(view) {
         {
             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            Unit
         }
     }
 
