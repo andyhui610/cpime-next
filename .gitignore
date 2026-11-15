@@ -1,0 +1,34 @@
+# Rust 與編譯產物 / Rust & Build Artifacts
+/target/
+**/*.rs.bk
+*.dll
+*.so
+*.exe
+*.pdb
+
+# Python 虛擬環境與快取 / Python Virtual Environments & Cache
+/tools/.venv/
+/tools/venv/
+__pycache__/
+*.pyc
+/tools/cache/
+
+# 生成的資料庫與個人隱私詞庫 / Generated Databases & User Privacy Data
+user_dict.db
+user_dict.db-shm
+user_dict.db-wal
+/core/assets/cpime_dict.db
+/core/assets/cpime_dict.db-shm
+/core/assets/cpime_dict.db-wal
+
+# Android 與 IDE 暫存檔 / Android, IDE & OS Temporary Files
+.gradle/
+/android/build/
+/android/app/build/
+local.properties
+.idea/
+.vscode/
+.DS_Store
+
+# 重複含空白檔名排除 / Exclude duplicate spaced filename
+GEMINI. md

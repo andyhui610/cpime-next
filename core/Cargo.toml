@@ -1,0 +1,17 @@
+[package]
+name = "cpime-core"
+version = "0.1.0"
+edition = "2021"
+description = "Cross-Platform Cantonese & English-Lookup IME Core Engine"
+
+[lib]
+name = "cpime_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "repl"
+path = "src/bin/repl.rs"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+
