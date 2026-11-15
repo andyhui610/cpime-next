@@ -8,7 +8,14 @@ CPIME-Next 種子詞庫生成腳本 (init_seed_db.py)
 
 import os
 import sqlite3
+import sys
 from pathlib import Path
+
+# 確保 Windows CI (cp1252) 環境下輸出繁體中文不會發生 UnicodeEncodeError
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
 def get_Cantonese_seed_data() -> list[tuple[str, str, str, str, int]]:

@@ -8,6 +8,10 @@ on:
     branches:
       - main
 
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+
 jobs:
   test-and-build:
     name: Build & Test (Windows)

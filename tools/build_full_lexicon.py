@@ -8,9 +8,16 @@ import csv
 import re
 import sqlite3
 import subprocess
+import sys
 import urllib.request
 from pathlib import Path
 from opencc import OpenCC
+
+# 確保 Windows CI (cp1252) 環境下輸出繁體中文不會發生 UnicodeEncodeError
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # 1. 路徑與資料源設定
 BASE_DIR = Path(__file__).resolve().parent
