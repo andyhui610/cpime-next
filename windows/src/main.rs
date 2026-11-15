@@ -4,6 +4,8 @@
 //! 讓使用者可直接在記事本 (Notepad)、瀏覽器 (Chrome / Edge)、VS Code 等任何 Windows 應用程式中
 //! 流暢輸入廣東話（支援標準粵拼、教院/耶魯/劉錫祥/港式拼法、懶音容錯、首字母簡拼、打英文直出中文與智慧自造詞）。
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 pub mod hook;
 pub mod injector;
 pub mod overlay;
@@ -11,7 +13,7 @@ pub mod tray;
 
 use std::env;
 use std::mem::zeroed;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 
 use cpime_core::{CpimeEngine, OutputMode};
@@ -23,34 +25,85 @@ use crate::hook::{install_keyboard_hook, uninstall_keyboard_hook};
 use crate::overlay::{init_overlay_window, update_overlay, ImeMode, OverlayDisplay};
 use crate::tray::{init_tray_icon, remove_tray_icon};
 
-/// 自動解析系統詞庫 (`cpime_dict.db`) 路徑
-fn resolve_sys_db_path() -> PathBuf {
-    let default_path = CpimeEngine::default_db_path();
-    if default_path.exists() {
-        return default_path;
-    }
+/// 取得目前執行檔 (`.exe`) 所在的資料夾路徑
+fn exe_dir() -> Option<PathBuf> {
+    env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|parent| parent.to_path_buf()))
+}
 
-    let candidates = [
-        PathBuf::from("core/assets/cpime_dict.db"),
-        PathBuf::from("../core/assets/cpime_dict.db"),
-        PathBuf::from("cpime_dict.db"),
-    ];
-    for path in candidates {
-        if path.exists() {
-            return path;
+/// 依可攜式優先順序解析系統詞庫 (`cpime_dict.db`) 路徑
+fn resolve_sys_db_path_from(
+    exe_dir: Option<&Path>,
+    cwd: Option<&Path>,
+    fallback_default: PathBuf,
+) -> PathBuf {
+    // 1. 第一優先：與 .exe 同級的可攜式相對路徑 (assets/cpime_dict.db 或 ./cpime_dict.db)
+    if let Some(dir) = exe_dir {
+        let portable_candidates = [
+            dir.join("assets").join("cpime_dict.db"),
+            dir.join("cpime_dict.db"),
+        ];
+        for path in portable_candidates {
+            if path.exists() {
+                return path;
+            }
         }
     }
 
-    default_path
+    // 2. 第二優先：工作目錄相對路徑與開發環境 (cargo run) 回退路徑
+    if let Some(wd) = cwd {
+        let cwd_candidates = [
+            wd.join("assets").join("cpime_dict.db"),
+            wd.join("cpime_dict.db"),
+            wd.join("core").join("assets").join("cpime_dict.db"),
+            wd.join("..").join("core").join("assets").join("cpime_dict.db"),
+        ];
+        for path in cwd_candidates {
+            if path.exists() {
+                return path;
+            }
+        }
+    }
+
+    if fallback_default.exists() {
+        return fallback_default;
+    }
+
+    fallback_default
 }
 
-/// 自動解析個人學習詞庫 (`user_dict.db`) 路徑（優先使用專案目錄 `/core/assets/user_dict.db`，若無法存取則使用使用者目錄）
-fn resolve_user_db_path() -> PathBuf {
-    let default_user_path = CpimeEngine::default_user_db_path();
+/// 自動解析系統詞庫 (`cpime_dict.db`) 路徑
+fn resolve_sys_db_path() -> PathBuf {
+    resolve_sys_db_path_from(
+        exe_dir().as_deref(),
+        env::current_dir().ok().as_deref(),
+        CpimeEngine::default_db_path(),
+    )
+}
+
+/// 依可攜式優先順序解析個人學習詞庫 (`user_dict.db`) 路徑
+fn resolve_user_db_path_from(exe_dir: Option<&Path>, default_user_path: PathBuf) -> PathBuf {
+    // 1. 若處於可攜式發佈目錄（exe 同級已有 user_dict.db 或系統詞庫），直接在 exe 同目錄生成/讀取 user_dict.db
+    if let Some(dir) = exe_dir {
+        let portable_user_db = dir.join("user_dict.db");
+        let has_portable_sys_db =
+            dir.join("assets").join("cpime_dict.db").exists() || dir.join("cpime_dict.db").exists();
+        if portable_user_db.exists() || has_portable_sys_db {
+            return portable_user_db;
+        }
+    }
+
+    // 2. 開發環境回退至專案目錄 /core/assets/user_dict.db
     if let Some(parent) = default_user_path.parent() {
         if parent.exists() {
             return default_user_path;
         }
+    }
+
+    // 3. 若無專案目錄則優先於 exe 同級目錄生成，最後才退至使用者設定檔目錄
+    if let Some(dir) = exe_dir {
+        return dir.join("user_dict.db");
     }
 
     if let Ok(profile) = env::var("USERPROFILE") {
@@ -60,6 +113,11 @@ fn resolve_user_db_path() -> PathBuf {
     }
 
     PathBuf::from("user_dict.db")
+}
+
+/// 自動解析個人學習詞庫 (`user_dict.db`) 路徑
+fn resolve_user_db_path() -> PathBuf {
+    resolve_user_db_path_from(exe_dir().as_deref(), CpimeEngine::default_user_db_path())
 }
 
 fn main() {
@@ -141,5 +199,72 @@ fn main() {
 
     uninstall_keyboard_hook(hhook);
     remove_tray_icon();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn test_portable_path_resolution_priority() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = env::temp_dir().join(format!("cpime_portable_test_{}_{}", std::process::id(), nanos));
+        let portable_dir = base.join("portable");
+        let portable_assets = portable_dir.join("assets");
+        let empty_cwd = base.join("empty_cwd");
+        let dev_assets = base.join("dev_core").join("assets");
+
+        fs::create_dir_all(&portable_assets).unwrap();
+        fs::create_dir_all(&empty_cwd).unwrap();
+        fs::create_dir_all(&dev_assets).unwrap();
+
+        let portable_assets_db = portable_assets.join("cpime_dict.db");
+        let portable_root_db = portable_dir.join("cpime_dict.db");
+        let dev_sys_db = dev_assets.join("cpime_dict.db");
+        let dev_user_db = dev_assets.join("user_dict.db");
+
+        // 同時建立開發環境 DB 與可攜式目錄 assets/cpime_dict.db，驗證可攜式路徑絕對優先
+        fs::write(&dev_sys_db, b"dev").unwrap();
+        fs::write(&portable_assets_db, b"portable_assets").unwrap();
+        fs::write(&portable_root_db, b"portable_root").unwrap();
+
+        assert_eq!(
+            resolve_sys_db_path_from(Some(&portable_dir), Some(&empty_cwd), dev_sys_db.clone()),
+            portable_assets_db
+        );
+        assert_eq!(
+            resolve_user_db_path_from(Some(&portable_dir), dev_user_db.clone()),
+            portable_dir.join("user_dict.db")
+        );
+
+        // 移除 assets/cpime_dict.db 後，應命中同級 ./cpime_dict.db
+        fs::remove_file(&portable_assets_db).unwrap();
+        assert_eq!(
+            resolve_sys_db_path_from(Some(&portable_dir), Some(&empty_cwd), dev_sys_db.clone()),
+            portable_root_db
+        );
+        assert_eq!(
+            resolve_user_db_path_from(Some(&portable_dir), dev_user_db.clone()),
+            portable_dir.join("user_dict.db")
+        );
+
+        // 若執行檔目錄內皆無詞庫（如 cargo run 在 target/debug 執行），應回退至開發環境路徑
+        fs::remove_file(&portable_root_db).unwrap();
+        assert_eq!(
+            resolve_sys_db_path_from(Some(&portable_dir), Some(&empty_cwd), dev_sys_db.clone()),
+            dev_sys_db
+        );
+        assert_eq!(
+            resolve_user_db_path_from(Some(&portable_dir), dev_user_db.clone()),
+            dev_user_db
+        );
+
+        let _ = fs::remove_dir_all(&base);
+    }
 }
 

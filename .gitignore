@@ -32,3 +32,7 @@ local.properties
 
 # 重複含空白檔名排除 / Exclude duplicate spaced filename
 GEMINI. md
+
+# 本地發佈打包暫存 / Release Packaging Output
+/dist/
+*.zip

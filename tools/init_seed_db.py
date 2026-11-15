@@ -124,61 +124,68 @@ def get_Cantonese_seed_data() -> list[tuple[str, str, str, str, int]]:
         ("興", "hing", "hing1", "h", 9600),
         ("如", "jyu", "jyu4", "j", 9600),
         ("做", "zou", "zou6", "z", 9850),
+        ("去", "heoi", "heoi3", "h", 9800),
+        ("喺度", "haidou", "hai2 dou6", "hd", 9600),
+        ("度", "dou", "dou6", "d", 9000),
     ]
     return raw_entries
 
 
-def get_english_seed_data() -> list[tuple[str, str, int]]:
+def get_english_seed_data() -> list[tuple[str, str, int, int]]:
     """
     回傳高頻英漢反查詞庫清單：
-    格式：(eng_word, canto_word, priority)
+    格式：(eng_word, canto_word, is_colloquial, priority)
     """
     raw_entries = [
-        # 核心指定測試詞彙
-        ("sun", "日", 1000),
-        ("sun", "太陽", 950),
-        ("afternoon", "中午", 1000),
-        ("afternoon", "下午", 950),
-        ("afternoon", "晏晝", 900),
-        ("man", "人", 1000),
-        ("man", "男人", 950),
-        ("lift", "𨋢", 1000),
-        ("lift", "升降機", 950),
-        ("strawberry", "士多啤梨", 1000),
-        ("strawberry", "草莓", 950),
-        ("morning", "朝早", 1000),
-        ("morning", "早上", 950),
+        # 核心指定測試詞彙（權重對齊 build_full_lexicon.py 之 9000~10000 區間）
+        ("sun", "日", 0, 10000),
+        ("sun", "太陽", 0, 9900),
+        ("afternoon", "中午", 0, 10000),
+        ("afternoon", "下午", 0, 9950),
+        ("afternoon", "晏晝", 1, 9900),
+        ("man", "人", 0, 10000),
+        ("man", "男人", 0, 9900),
+        ("lift", "𨋢", 1, 10000),
+        ("lift", "升降機", 0, 9950),
+        ("lift", "電梯", 0, 9900),
+        ("strawberry", "士多啤梨", 1, 10000),
+        ("strawberry", "草莓", 0, 9900),
+        ("morning", "朝早", 1, 10000),
+        ("morning", "早上", 0, 9900),
         # 其他常用英漢/英粵詞彙
-        ("wing", "翼", 1000),
-        ("wing", "翅膀", 950),
-        ("bus", "巴士", 1000),
-        ("taxi", "的士", 1000),
-        ("cheese", "芝士", 1000),
-        ("chocolate", "朱古力", 1000),
-        ("coffee", "咖啡", 1000),
-        ("tea", "茶", 1000),
-        ("apple", "蘋果", 1000),
-        ("orange", "橙", 1000),
-        ("water", "水", 1000),
-        ("lunch", "食晏", 1000),
-        ("lunch", "午餐", 950),
-        ("dinner", "食晚飯", 1000),
-        ("dinner", "晚餐", 950),
-        ("night", "夜晚", 1000),
-        ("night", "晚上", 950),
-        ("today", "今日", 1000),
-        ("tomorrow", "聽日", 1000),
-        ("yesterday", "尋日", 1000),
-        ("hello", "你好", 1000),
-        ("thanks", "唔該", 1000),
-        ("thanks", "多謝", 950),
-        ("sorry", "對唔住", 1000),
-        ("friend", "朋友", 1000),
-        ("home", "屋企", 1000),
-        ("work", "返工", 1000),
-        ("work", "工作", 950),
-        ("phone", "電話", 1000),
-        ("computer", "電腦", 1000),
+        ("wing", "翼", 0, 10000),
+        ("wing", "翅膀", 0, 9900),
+        ("bus", "巴士", 0, 10000),
+        ("taxi", "的士", 0, 10000),
+        ("cheese", "芝士", 0, 10000),
+        ("chocolate", "朱古力", 1, 10000),
+        ("coffee", "咖啡", 0, 10000),
+        ("tea", "茶", 0, 10000),
+        ("apple", "蘋果", 0, 10000),
+        ("orange", "橙", 0, 10000),
+        ("water", "水", 0, 10000),
+        ("lunch", "食晏", 1, 10000),
+        ("lunch", "午餐", 0, 9950),
+        ("dinner", "食晚飯", 1, 10000),
+        ("dinner", "晚餐", 0, 9950),
+        ("night", "夜晚", 1, 10000),
+        ("night", "晚上", 0, 9900),
+        ("today", "今日", 1, 10000),
+        ("today", "今天", 0, 9900),
+        ("tomorrow", "聽日", 1, 10000),
+        ("tomorrow", "明天", 0, 9900),
+        ("yesterday", "尋日", 1, 10000),
+        ("yesterday", "昨天", 0, 9900),
+        ("hello", "你好", 0, 10000),
+        ("thanks", "唔該", 1, 10000),
+        ("thanks", "多謝", 0, 9900),
+        ("sorry", "對唔住", 1, 10000),
+        ("friend", "朋友", 0, 10000),
+        ("home", "屋企", 1, 10000),
+        ("work", "返工", 1, 10000),
+        ("work", "工作", 0, 9900),
+        ("phone", "電話", 0, 10000),
+        ("computer", "電腦", 0, 10000),
     ]
     return raw_entries
 
@@ -237,8 +244,8 @@ def build_seed_database(db_path: Path) -> None:
         )
 
         eng_data = [
-            (eng, canto, 1, prio)
-            for (eng, canto, prio) in get_english_seed_data()
+            (eng, canto, is_colloquial, prio)
+            for (eng, canto, is_colloquial, prio) in get_english_seed_data()
         ]
         cursor.executemany(
             """

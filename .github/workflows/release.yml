@@ -1,0 +1,67 @@
+name: Release Windows Portable Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package-windows:
+    name: Build Full Lexicon & Package Windows IME
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies & build full lexicon database
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tools/requirements.txt
+          python tools/build_full_lexicon.py
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Windows IME (release)
+        run: cargo build --release -p cpime-win
+
+      - name: Assemble portable distribution folder & compress archive
+        shell: pwsh
+        run: |
+          $distDir = "dist/CPIME-Next"
+          $assetsDir = "$distDir/assets"
+          New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
+
+          Copy-Item "target/release/cpime-win.exe" "$distDir/CPIME-Next.exe" -Force
+          Copy-Item "core/assets/cpime_dict.db" "$assetsDir/cpime_dict.db" -Force
+          Copy-Item "README.md" "$distDir/README.md" -Force
+
+          Compress-Archive -Path $distDir -DestinationPath "CPIME-Next-Windows-x64.zip" -Force
+
+      - name: Upload Windows portable package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CPIME-Next-Windows-x64
+          path: CPIME-Next-Windows-x64.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: CPIME-Next-Windows-x64.zip
+          generate_release_notes: true
