@@ -2,6 +2,7 @@
 
 pub mod decoder;
 pub mod engine;
+pub mod jni_bridge;
 pub mod phonetics;
 pub mod phrase_composer;
 pub mod user_dict;

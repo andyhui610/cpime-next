@@ -23,8 +23,13 @@ user_dict.db-wal
 
 # Android 與 IDE 暫存檔 / Android, IDE & OS Temporary Files
 .gradle/
+/android/.gradle/
 /android/build/
 /android/app/build/
+/android/app/src/main/assets/cpime_dict.db
+/android/app/src/main/jniLibs/
+*.apk
+*.aab
 local.properties
 .idea/
 .vscode/

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CPIME-Next</string>
+    <string name="ime_name">CPIME-Next 廣東話輸入法</string>
+    <string name="subtype_cantonese_hk">廣東話（粵拼 / 英漢反查）</string>
+    <string name="subtype_english">English</string>
+</resources>

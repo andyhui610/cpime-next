@@ -97,4 +97,25 @@
    - 整句候選詞的 `consumed_len = input.len()`（選中後整句上屏並清空 `input_buffer`）。
    - 排在第 2 名之後的開頭前綴詞/單字（如長句開頭的「今日」或「我」），其 `consumed_len` 為該詞對應的原始拼音長度（如 `"ngo"` 為 3）。當使用者選中它時，僅將該詞上屏，並從 `input_buffer` 前端切除 `consumed_len` 個字元，剩餘拼音留在緩衝區立即重新解碼！
 
+## 9. Android IME Frontend (`/android` JNI + InputMethodService + Jetpack Compose)
+1. **Rust JNI 橋接層 (`/core/src/jni_bridge.rs`)**：
+   - 啟用 `cdylib` 編譯目標（輸出 `libcpime_core.so`），使用 `jni` crate 暴露給 Kotlin `com.andyhui.cpime.NativeEngine` 呼叫：
+     * `initEngine(sysDbPath: String, userDbPath: String): Long`（回傳 `Box::into_raw` 的引擎指標）
+     * `destroyEngine(ptr: Long)`
+     * `getSegmentedPinyin(ptr: Long, input: String): String`
+     * `getCandidatesJson(ptr: Long, input: String, limit: Int): String`（回傳 JSON 陣列，含 `word`, `consumedChars`, `source`）
+     * `commitCandidate(ptr: Long, input: String, index: Int): String`（記錄 Unigram/Bigram/自造詞並回傳上屏詞與消耗長度）
+     * `getPredictionsJson(ptr: Long, limit: Int): String`
+     * `setOutputMode(ptr: Long, isWritten: Boolean)`
+     * `clearContext(ptr: Long)`
+2. **資料庫初始化與資產複製 (`AssetCopyHelper`)**：
+   - 首次啟動鍵盤時，檢查 `context.filesDir/cpime_dict.db` 是否存在，若不存在則從 APK `assets/cpime_dict.db` 複製過去；個人詞庫則固定存放於 `context.filesDir/user_dict.db`。
+3. **`InputMethodService` + Jetpack Compose 生命週期綁定**：
+   - 建立 `CantoneseIMEService : InputMethodService, LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner`，並將 `window.window.decorView` 透過 `setViewTreeLifecycleOwner` 等擴充方法綁定至 Service，避免 `ComposeView` 因找不到 Lifecycle 而崩潰。
+4. **軟鍵盤 UI 與操作體驗 (`KeyboardScreen.kt`)**：
+   - **頂部狀態與拼音列（Composing Bar）**：顯示格式化後的音節字串（如 `ngo'gam'jat`），右側提供 `[粵/書]`（口語/書面語）一鍵切換膠囊與 `[粵/英]` 切換鈕。
+   - **候選詞橫向捲動列（Candidate Row）**：使用 `LazyRow` 顯示候選詞（第 1 順位高亮顯示，英文反查詞附小字提示），支援點擊候選詞觸發「整句上屏」或「剝洋蔥式部分選字（Partial Commit）」。當未輸入拼音時，顯示 Bigram 聯想詞。
+   - **鍵盤主體（QWERTY 26 鍵 + 廣東話標點列）**：支援震動回饋（Haptic Feedback）、長按退格鍵連續刪除、空白鍵選首詞上屏、`Enter` 鍵送出原始英文字串。
+
+
 
