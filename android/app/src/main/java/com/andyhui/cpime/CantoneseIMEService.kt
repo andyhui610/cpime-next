@@ -112,7 +112,9 @@ class CantoneseIMEService :
                     isEngineReady = isEngineReady,
                     onLetterClick = ::handleLetterInput,
                     onBackspace = ::handleBackspace,
+                    onBackspaceSwipeLeft = ::handleBackspaceSwipeLeft,
                     onSpace = ::handleSpace,
+                    onMoveCursor = ::handleMoveCursor,
                     onEnter = ::handleEnter,
                     onCandidateClick = ::handleCandidateClick,
                     onPunctuationClick = ::handlePunctuationInput,
@@ -209,10 +211,77 @@ class CantoneseIMEService :
             return
         }
 
-        // 無拼音緩衝時發送標準退格鍵事件，安全刪除目標 App 文字（含 UTF-16 Surrogate Pairs 如「𨋢」）
-        sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+        // 無拼音緩衝時安全刪除目標 App 文字，檢查 UTF-16 Surrogate Pairs 避免將「𨋢」等 4-byte 香港字切碎成亂碼
+        val selected = ic.getSelectedText(0)
+        if (!selected.isNullOrEmpty()) {
+            sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+        } else {
+            val before = ic.getTextBeforeCursor(2, 0)
+            when {
+                before != null && before.length == 2 &&
+                    Character.isSurrogatePair(before[0], before[1]) -> {
+                    ic.deleteSurroundingText(2, 0)
+                }
+                !before.isNullOrEmpty() -> {
+                    ic.deleteSurroundingText(1, 0)
+                }
+                else -> {
+                    sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+                }
+            }
+        }
         nativeEngine?.clearContext()
         predictions = emptyList()
+    }
+
+    private fun handleBackspaceSwipeLeft() {
+        val ic = currentInputConnection ?: return
+        if (isCantoneseMode && inputBuffer.isNotEmpty()) {
+            clearCurrentBuffer()
+            return
+        }
+
+        val selected = ic.getSelectedText(0)
+        if (!selected.isNullOrEmpty()) {
+            sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+            nativeEngine?.clearContext()
+            predictions = emptyList()
+            return
+        }
+
+        val before = ic.getTextBeforeCursor(32, 0)?.toString().orEmpty()
+        if (before.isEmpty()) {
+            sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+        } else {
+            var idx = before.length
+            while (idx > 0 && before[idx - 1].isWhitespace()) {
+                idx--
+            }
+            if (idx > 0) {
+                val lastChar = before[idx - 1]
+                if (lastChar.code < 128 && lastChar.isLetterOrDigit()) {
+                    while (idx > 0 && before[idx - 1].code < 128 && before[idx - 1].isLetterOrDigit()) {
+                        idx--
+                    }
+                } else if (idx >= 2 && Character.isSurrogatePair(before[idx - 2], before[idx - 1])) {
+                    idx -= 2
+                } else {
+                    idx -= 1
+                }
+            }
+            val deleteChars = (before.length - idx).coerceAtLeast(1)
+            ic.deleteSurroundingText(deleteChars, 0)
+        }
+        nativeEngine?.clearContext()
+        predictions = emptyList()
+    }
+
+    private fun handleMoveCursor(direction: Int) {
+        if (direction < 0) {
+            sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT)
+        } else if (direction > 0) {
+            sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT)
+        }
     }
 
     private fun handleSpace() {
@@ -347,7 +416,7 @@ class CantoneseIMEService :
             val remainingFormatted =
                 engine?.formatPinyin(inputBuffer)?.ifEmpty { inputBuffer } ?: inputBuffer
             segmentedPinyin = remainingFormatted
-            candidates = engine?.getCandidates(inputBuffer, 24).orEmpty()
+            candidates = engine?.getCandidates(inputBuffer, 60).orEmpty()
             predictions = emptyList()
             ic.setComposingText(remainingFormatted, 1)
         } else {
@@ -428,7 +497,7 @@ class CantoneseIMEService :
 
         val formatted = engine?.formatPinyin(inputBuffer)?.ifEmpty { inputBuffer } ?: inputBuffer
         segmentedPinyin = formatted
-        candidates = engine?.getCandidates(inputBuffer, 24).orEmpty()
+        candidates = engine?.getCandidates(inputBuffer, 60).orEmpty()
         predictions = emptyList()
         currentInputConnection?.setComposingText(formatted, 1)
     }

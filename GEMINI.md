@@ -149,6 +149,20 @@
    - **Windows (`/windows`)**：支援 `Ctrl + Shift + E` 快捷鍵與右鍵選單「英譯粵整句模式」，系統列顯示紫底白字 **`「譯」`** 圖示；整句模式下單次 `Space` 插入空白字元、連按兩次 `Space`（Double Space）或按 `Enter` / `1~9` 將對應候選整句上屏。
    - **Android (`/android`)**：軟鍵盤工具列新增 **`[譯]`** 切換按鈕；點亮時空白鍵於緩衝區加入 `' '`（連按兩下空白鍵可上屏首選句），候選詞列即時顯示廣東話整句，點擊候選句或確認鍵即可整句上屏。
 
-
-
+## 12. Android Ergonomics & Tactile UX (`KeyboardScreen.kt` & `CantoneseIMEService.kt`)
+1. **零延遲觸控與按鍵氣泡 (`ErgonomicKey` & Haptics)**：
+   - 捨棄預設遲鈍的 `clickable`，改用 `Modifier.pointerInput`（`awaitEachGesture` + `awaitFirstDown`）：手指按下（Down）瞬間立即觸發 `LocalView.current.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)` 並在按鍵正上方透過 `Popup` 渲染無延遲浮動放大氣泡（Floating Key Preview Bubble）。
+2. **空白鍵游標觸控板（Spacebar Trackpad）**：
+   - 在空白鍵上監聽水平拖曳手勢，進入「游標控制模式」（顯示 `◀ 滑動移動游標 ▶`）。
+   - 當累積位移每超過 `45px`（約 `18.dp`），觸發微震動並呼叫 `sendDownUpKeyEvents(KEYCODE_DPAD_LEFT / RIGHT)` 精準移動目標文字框游標。
+3. **智慧退格鍵手勢（Smart Backspace）**：
+   - **單擊**：刪除 1 個拼音字母；若 `inputBuffer` 為空則檢查 `getTextBeforeCursor(2, 0)` 是否為 `Character.isSurrogatePair`（如「𨋢」），確保完整刪除 4-byte UTF-16 擴展漢字而不切碎成亂碼。
+   - **長按連發（Auto-Repeat）**：按住超過 `350ms` 後，以每 `45ms` 一個字元的速度連續刪除（按住超過 `1500ms` 改為按詞刪除）。
+   - **左滑清空（Swipe-Left to Clear）**：在退格鍵上向左滑動超過 `30.dp`，當 `inputBuffer` 非空時一鍵清空整串拼音；若為空則刪除前一個詞。
+4. **上滑 / 長按副標記輸入（Flick-Up & Long-Press Numbers/Symbols）**：
+   - 第一排字母鍵 `q`~`p` 右上角顯示副標記 `1`~`0`，第二、三排顯示常用廣東話與全形標點（`「`, `」`, `、`, `：`, `；`, `？`, `！` 等）。
+   - 手指在按鍵上**向上滑動（`dragAmount.y < -25f`）**或**長按 `280ms`**，氣泡即時切換顯示副標記字元，放開手即輸出該數字或標點。
+5. **可展開式 4 欄大候選字網格（Expandable 4-Column Candidate Grid）**：
+   - 候選詞橫向列（`LazyRow`）最右側當候選詞超過 4 個時固定顯示展開按鈕 `[⌄]`（展開時顯示 `[⌃]`）。
+   - 展開時，下方 QWERTY 按鍵區切換為 `LazyVerticalGrid(columns = GridCells.Fixed(4))`，一次讀取前 60 個候選字詞（`NativeEngine.getCandidatesJson(ptr, input, 60)`），右側附帶收合/退格/清空側欄，選字後自動收合回鍵盤。
 
