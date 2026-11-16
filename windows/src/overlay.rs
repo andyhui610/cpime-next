@@ -32,7 +32,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::tray::{
-    ID_EXIT, ID_MODE_COLLOQUIAL, ID_MODE_WRITTEN, ID_RELOAD_USER_DICT, ID_TOGGLE_IME, WM_TRAYICON,
+    ID_EXIT, ID_MODE_COLLOQUIAL, ID_MODE_EN_SENTENCE, ID_MODE_WRITTEN, ID_RELOAD_USER_DICT,
+    ID_TOGGLE_IME, WM_TRAYICON,
 };
 
 /// 狀態提示計時器 ID（切換 `[粵]` / `[英]` 時短暫顯示 1000ms 後自動隱藏）
@@ -56,22 +57,27 @@ const COLOR_FIRST_BG: COLORREF = rgb(0x28, 0x34, 0x4A); // #28344A 第 1 順位�
 const COLOR_OTHER_CAND: COLORREF = rgb(0xEC, 0xEF, 0xF4); // #ECEFF4 其他候選詞亮白色
 const COLOR_ENG_MODE: COLORREF = rgb(0xA6, 0xE3, 0xA1); // #A6E3A1 [英] 模式提示亮綠色
 const COLOR_WRITTEN_ACCENT: COLORREF = rgb(0x34, 0xD3, 0x99); // #34D399 [粵·書面] 模式翠綠色
+const COLOR_TRANS_ACCENT: COLORREF = rgb(0xC0, 0x84, 0xFC); // #C084FC [譯] 英譯粵整句亮紫色
 
-/// 輸入法當前模式（粵語模式 / 英文模式）
+/// 輸入法當前模式（粵語模式 / 英譯粵整句模式 / 英文模式）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImeMode {
     /// 粵語雙軌輸入模式（粵拼 + 英文反查）
     Cantonese,
+    /// 英文整句直出廣東話模式
+    EnSentence,
     /// 英文直通模式
     English,
 }
 
 impl ImeMode {
-    /// 簡短模式標記（顯示於浮動候選窗標題列：`[粵·口語]` / `[粵·書面]` / `[英]`）
+    /// 簡短模式標記（顯示於浮動候選窗標題列：`[粵·口語]` / `[粵·書面]` / `[譯·口語]` / `[譯·書面]` / `[英]`）
     pub fn short_badge(self, output_mode: OutputMode) -> &'static str {
         match (self, output_mode) {
             (ImeMode::Cantonese, OutputMode::Colloquial) => "[粵·口語]",
             (ImeMode::Cantonese, OutputMode::Written) => "[粵·書面]",
+            (ImeMode::EnSentence, OutputMode::Colloquial) => "[譯·口語]",
+            (ImeMode::EnSentence, OutputMode::Written) => "[譯·書面]",
             (ImeMode::English, _) => "[英]",
         }
     }
@@ -81,6 +87,8 @@ impl ImeMode {
         match (self, output_mode) {
             (ImeMode::Cantonese, OutputMode::Colloquial) => "[粵·口語] 廣東話口語模式",
             (ImeMode::Cantonese, OutputMode::Written) => "[粵·書面] 標準書面語模式",
+            (ImeMode::EnSentence, OutputMode::Colloquial) => "[譯·口語] 英文整句直出廣東話模式",
+            (ImeMode::EnSentence, OutputMode::Written) => "[譯·書面] 英文整句轉書面語模式",
             (ImeMode::English, _) => "[英] 英文直通模式",
         }
     }
@@ -446,6 +454,7 @@ unsafe fn paint_overlay(hwnd: HWND) {
             let color = match (mode, output_mode) {
                 (ImeMode::Cantonese, OutputMode::Colloquial) => COLOR_FIRST_CAND,
                 (ImeMode::Cantonese, OutputMode::Written) => COLOR_WRITTEN_ACCENT,
+                (ImeMode::EnSentence, _) => COLOR_TRANS_ACCENT,
                 (ImeMode::English, _) => COLOR_ENG_MODE,
             };
             SetTextColor(mem_dc, color);
@@ -484,6 +493,7 @@ unsafe fn paint_overlay(hwnd: HWND) {
             let badge_color = match (mode, output_mode) {
                 (ImeMode::Cantonese, OutputMode::Written) => COLOR_WRITTEN_ACCENT,
                 (ImeMode::Cantonese, OutputMode::Colloquial) => COLOR_FIRST_CAND,
+                (ImeMode::EnSentence, _) => COLOR_TRANS_ACCENT,
                 (ImeMode::English, _) => COLOR_ENG_MODE,
             };
             SetTextColor(mem_dc, badge_color);
@@ -624,6 +634,9 @@ unsafe extern "system" fn overlay_wnd_proc(
             match cmd_id {
                 ID_TOGGLE_IME => {
                     crate::hook::toggle_ime_mode_from_ui();
+                }
+                ID_MODE_EN_SENTENCE => {
+                    crate::hook::toggle_en_sentence_mode_from_ui();
                 }
                 ID_MODE_COLLOQUIAL => {
                     crate::hook::set_output_mode_from_ui(OutputMode::Colloquial);

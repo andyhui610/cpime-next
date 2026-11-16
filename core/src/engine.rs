@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection, OpenFlags, Result as SqlResult};
 
 use crate::decoder::SentenceDecoder;
+use crate::en_sentence::{is_en_sentence_trigger, EnSentenceTranslator};
 use crate::phonetics::{
     expand_phonetic_queries, normalize_to_jyutping, sanitize_input, segment_hybrid_syllables,
     SyllableKind,
@@ -101,6 +102,18 @@ pub enum OutputMode {
     Written,
 }
 
+/// 輸入模式（粵拼雙軌模式 / 英文直通模式 / 英譯粵整句模式）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputMode {
+    /// 一般廣東話雙軌模式（粵拼 + 英文單字反查，並支援 `;` / `/` 前綴觸發英譯粵整句）
+    #[default]
+    Cantonese,
+    /// 英文直通模式
+    English,
+    /// 英文整句直出廣東話模式（允許輸入空白鍵組成英文句子並即時組裝廣東話整句）
+    EnSentenceMode,
+}
+
 /// 高頻「粵音直出書面語映射表」（於 `OutputMode::Written` 啟用時注入候選清單第 1~2 名）
 pub(crate) fn written_cantonese_mapping(code: &str) -> Option<&'static [&'static str]> {
     match code {
@@ -141,6 +154,10 @@ pub struct CpimeEngine {
     pub phrase_composer: PhraseComposer,
     /// 目前輸出語體模式（口語 / 書面語）
     pub output_mode: OutputMode,
+    /// 目前輸入模式（預設粵拼雙軌，亦可切換為 `EnSentenceMode`）
+    pub input_mode: InputMode,
+    /// 是否開啟「英文整句直出廣東話模式」
+    pub en_sentence_mode: bool,
 }
 
 /// `Engine` 型別別名，方便外部模組以 `Engine` 或 `CpimeEngine` 存取
@@ -202,11 +219,46 @@ impl CpimeEngine {
             last_committed_word: None,
             phrase_composer: PhraseComposer::new(),
             output_mode: OutputMode::Colloquial,
+            input_mode: InputMode::Cantonese,
+            en_sentence_mode: false,
         };
         let _ = engine.lookup_with_limit("sun", 1);
         let _ = engine.lookup_with_limit("aftern", 1);
         let _ = engine.lookup_with_limit("gamjat", 1);
         Ok(engine)
+    }
+
+    /// 設定是否啟用「英文整句直出廣東話模式」
+    pub fn set_en_sentence_mode(&mut self, enabled: bool) {
+        self.en_sentence_mode = enabled;
+        self.input_mode = if enabled {
+            InputMode::EnSentenceMode
+        } else if self.input_mode == InputMode::EnSentenceMode {
+            InputMode::Cantonese
+        } else {
+            self.input_mode
+        };
+    }
+
+    /// 取得目前是否啟用「英文整句直出廣東話模式」
+    pub fn is_en_sentence_mode(&self) -> bool {
+        self.en_sentence_mode
+    }
+
+    /// 設定輸入模式（同步維護 `en_sentence_mode` 狀態）
+    pub fn set_input_mode(&mut self, mode: InputMode) {
+        self.input_mode = mode;
+        self.en_sentence_mode = mode == InputMode::EnSentenceMode;
+    }
+
+    /// 取得目前輸入模式
+    pub fn get_input_mode(&self) -> InputMode {
+        self.input_mode
+    }
+
+    /// 判斷給定輸入是否觸發英文整句直出廣東話模式（獨立模式開關、`;` / `/` 前綴、或含空白的英文句子）
+    pub fn is_en_sentence_input(&self, raw_input: &str) -> bool {
+        is_en_sentence_trigger(raw_input, self.en_sentence_mode)
     }
 
     /// 設定輸出語體模式（口語 / 書面語）
@@ -276,8 +328,23 @@ impl CpimeEngine {
 
     /// 執行雙軌混合與個人記憶加權查詢並指定最大候選詞數量
     pub fn lookup_with_limit(&self, raw_input: &str, limit: usize) -> Vec<Candidate> {
+        if limit == 0 || raw_input.trim().is_empty() {
+            return Vec::new();
+        }
+
+        // 英文整句直出廣東話模式：獨立開關、`;` / `/` 免切換前綴，或包含空格的多字英文句子
+        if self.is_en_sentence_input(raw_input) {
+            let mut sentence_cands = EnSentenceTranslator::translate_en_sentence_with_conn(
+                raw_input,
+                self.output_mode,
+                Some(&self.conn),
+            );
+            sentence_cands.truncate(limit);
+            return sentence_cands;
+        }
+
         let cleaned = sanitize_input(raw_input);
-        if cleaned.is_empty() || limit == 0 {
+        if cleaned.is_empty() {
             return Vec::new();
         }
 

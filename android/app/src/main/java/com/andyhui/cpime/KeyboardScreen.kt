@@ -58,6 +58,7 @@ private object ImeColors {
     val PinyinAccent = Color(0xFF93C5FD)
     val ColloquialBlue = Color(0xFF2563EB)
     val WrittenGreen = Color(0xFF059669)
+    val TransPurple = Color(0xFF7C3AED)
     val EnglishSlate = Color(0xFF4B5563)
     val CandidateHighlight = Color(0xFF1E3A8A)
     val CandidateHighlightBorder = Color(0xFF3B82F6)
@@ -85,6 +86,7 @@ fun KeyboardScreen(
     predictions: List<CandidateItem>,
     isCantoneseMode: Boolean,
     isWrittenMode: Boolean,
+    isEnSentenceMode: Boolean,
     isEngineReady: Boolean,
     onLetterClick: (String) -> Unit,
     onBackspace: () -> Unit,
@@ -94,6 +96,7 @@ fun KeyboardScreen(
     onPunctuationClick: (String) -> Unit,
     onToggleLanguage: () -> Unit,
     onToggleOutputMode: () -> Unit,
+    onToggleEnSentenceMode: () -> Unit,
     onClearBuffer: () -> Unit,
 ) {
     val view = LocalView.current
@@ -110,6 +113,11 @@ fun KeyboardScreen(
 
     val displayedItems = if (inputBuffer.isNotEmpty()) candidates else predictions
     val isShowingPredictions = inputBuffer.isEmpty() && predictions.isNotEmpty()
+    val isEnSentenceActive = isCantoneseMode && (
+        isEnSentenceMode ||
+            inputBuffer.trimStart().startsWith(";") ||
+            inputBuffer.trimStart().startsWith("/")
+        )
 
     Column(
         modifier = Modifier
@@ -123,6 +131,7 @@ fun KeyboardScreen(
             segmentedPinyin = segmentedPinyin,
             isCantoneseMode = isCantoneseMode,
             isWrittenMode = isWrittenMode,
+            isEnSentenceMode = isEnSentenceMode,
             isEngineReady = isEngineReady,
             isShowingPredictions = isShowingPredictions,
             onClearBuffer = {
@@ -136,6 +145,7 @@ fun KeyboardScreen(
             candidates = displayedItems,
             isCantoneseMode = isCantoneseMode,
             isWrittenMode = isWrittenMode,
+            isEnSentenceMode = isEnSentenceMode,
             isShowingPredictions = isShowingPredictions,
             hasActiveInput = inputBuffer.isNotEmpty(),
             onCandidateClick = { idx, item ->
@@ -145,6 +155,10 @@ fun KeyboardScreen(
             onToggleOutputMode = {
                 triggerHaptic()
                 onToggleOutputMode()
+            },
+            onToggleEnSentenceMode = {
+                triggerHaptic()
+                onToggleEnSentenceMode()
             },
             onToggleLanguage = {
                 triggerHaptic()
@@ -190,12 +204,13 @@ fun KeyboardScreen(
                 isShifted = isShifted,
                 isCantoneseMode = isCantoneseMode,
                 isWrittenMode = isWrittenMode,
+                isEnSentenceActive = isEnSentenceActive,
                 hasInputBuffer = inputBuffer.isNotEmpty(),
                 onLetterClick = { ch ->
                     triggerHaptic()
-                    val output = if (!isCantoneseMode && isShifted) ch.uppercase() else ch
+                    val output = if ((!isCantoneseMode || isEnSentenceActive) && isShifted) ch.uppercase() else ch
                     onLetterClick(output)
-                    if (!isCantoneseMode && isShifted) {
+                    if ((!isCantoneseMode || isEnSentenceActive) && isShifted) {
                         isShifted = false
                     }
                 },
@@ -236,6 +251,7 @@ private fun ComposingBar(
     segmentedPinyin: String,
     isCantoneseMode: Boolean,
     isWrittenMode: Boolean,
+    isEnSentenceMode: Boolean,
     isEngineReady: Boolean,
     isShowingPredictions: Boolean,
     onClearBuffer: () -> Unit,
@@ -279,9 +295,10 @@ private fun ComposingBar(
             val statusText = when {
                 !isEngineReady -> "正在初始化 CPIME-Next 詞庫引擎..."
                 !isCantoneseMode -> "English 直通模式 · 點擊「英」切回廣東話"
+                isEnSentenceMode -> "英譯粵整句模式 · 輸入英文片語即時組出廣東話整句"
                 isShowingPredictions -> "語境聯想詞（Bigram）· 直接點選或輸入粵拼/英文"
                 isWrittenMode -> "CPIME-Next 廣東話 · 書面語模式 (粵音轉書面語)"
-                else -> "CPIME-Next 廣東話 · 口語模式 (粵拼 / 簡拼 / 打英文出中文)"
+                else -> "CPIME-Next 廣東話 · 口語模式 (粵拼 / 簡拼 / ; 整句英譯粵)"
             }
             Text(
                 text = statusText,
@@ -299,10 +316,12 @@ private fun CandidateToolbarRow(
     candidates: List<CandidateItem>,
     isCantoneseMode: Boolean,
     isWrittenMode: Boolean,
+    isEnSentenceMode: Boolean,
     isShowingPredictions: Boolean,
     hasActiveInput: Boolean,
     onCandidateClick: (Int, CandidateItem) -> Unit,
     onToggleOutputMode: () -> Unit,
+    onToggleEnSentenceMode: () -> Unit,
     onToggleLanguage: () -> Unit,
 ) {
     Row(
@@ -327,6 +346,28 @@ private fun CandidateToolbarRow(
             Text(
                 text = modeLabel,
                 color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+
+        Spacer(modifier = Modifier.width(5.dp))
+
+        // 固定置頂：[譯] 英文整句直出廣東話模式切換鈕
+        val transBg = if (isCantoneseMode && isEnSentenceMode) ImeColors.TransPurple else ImeColors.KeyBg
+        val transBorder = if (isCantoneseMode && isEnSentenceMode) ImeColors.TransPurple else ImeColors.KeyBorder
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(transBg)
+                .border(1.dp, transBorder, RoundedCornerShape(8.dp))
+                .clickable(onClick = onToggleEnSentenceMode)
+                .padding(horizontal = 9.dp, vertical = 7.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "譯",
+                color = if (isCantoneseMode && isEnSentenceMode) Color.White else ImeColors.TextPrimary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
             )
@@ -482,6 +523,7 @@ private fun QwertyKeyboardBody(
     isShifted: Boolean,
     isCantoneseMode: Boolean,
     isWrittenMode: Boolean,
+    isEnSentenceActive: Boolean,
     hasInputBuffer: Boolean,
     onLetterClick: (String) -> Unit,
     onToggleShift: () -> Unit,
@@ -494,6 +536,7 @@ private fun QwertyKeyboardBody(
     onHaptic: () -> Unit,
 ) {
     val keyHeight = 46.dp
+    val useUpperLabels = (!isCantoneseMode || isEnSentenceActive) && isShifted
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -506,7 +549,7 @@ private fun QwertyKeyboardBody(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             QwertyRow1.forEach { letter ->
-                val label = if (!isCantoneseMode && isShifted) letter.uppercase() else letter
+                val label = if (useUpperLabels) letter.uppercase() else letter
                 KeyButton(
                     label = label,
                     height = keyHeight,
@@ -524,7 +567,7 @@ private fun QwertyKeyboardBody(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             QwertyRow2.forEach { letter ->
-                val label = if (!isCantoneseMode && isShifted) letter.uppercase() else letter
+                val label = if (useUpperLabels) letter.uppercase() else letter
                 KeyButton(
                     label = label,
                     height = keyHeight,
@@ -539,17 +582,17 @@ private fun QwertyKeyboardBody(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            val shiftLabel = if (!isCantoneseMode && isShifted) "⬆" else "⇧"
+            val shiftLabel = if (useUpperLabels) "⬆" else "⇧"
             KeyButton(
                 label = shiftLabel,
                 height = keyHeight,
-                backgroundColor = if (!isCantoneseMode && isShifted) ImeColors.ColloquialBlue else ImeColors.FuncKeyBg,
+                backgroundColor = if (useUpperLabels) ImeColors.ColloquialBlue else ImeColors.FuncKeyBg,
                 modifier = Modifier.weight(1.35f),
                 onClick = onToggleShift,
             )
 
             QwertyRow3.forEach { letter ->
-                val label = if (!isCantoneseMode && isShifted) letter.uppercase() else letter
+                val label = if (useUpperLabels) letter.uppercase() else letter
                 KeyButton(
                     label = label,
                     height = keyHeight,
@@ -569,11 +612,16 @@ private fun QwertyKeyboardBody(
         // 第 4 排底部功能列：123 | 粵/英 | ， | 空白鍵 (顯示目前模式) | 。 | Enter
         val spaceLabel = when {
             !isCantoneseMode -> "CPIME English"
+            isEnSentenceActive -> "空格 (連按兩下上屏)"
             hasInputBuffer -> "選取首選詞"
             isWrittenMode -> "CPIME 廣東話 (書面語)"
             else -> "CPIME 廣東話 (口語)"
         }
-        val enterLabel = if (isCantoneseMode && hasInputBuffer) "原文" else "↵"
+        val enterLabel = when {
+            isEnSentenceActive && hasInputBuffer -> "上屏"
+            isCantoneseMode && hasInputBuffer -> "原文"
+            else -> "↵"
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -622,9 +670,9 @@ private fun QwertyKeyboardBody(
             )
             KeyButton(
                 label = enterLabel,
-                fontSize = if (enterLabel == "原文") 13.sp else 18.sp,
+                fontSize = if (enterLabel == "原文" || enterLabel == "上屏") 13.sp else 18.sp,
                 height = keyHeight,
-                backgroundColor = ImeColors.ColloquialBlue,
+                backgroundColor = if (isEnSentenceActive) ImeColors.TransPurple else ImeColors.ColloquialBlue,
                 modifier = Modifier.weight(1.5f),
                 onClick = onEnter,
             )

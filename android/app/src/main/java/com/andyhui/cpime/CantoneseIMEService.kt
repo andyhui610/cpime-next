@@ -61,6 +61,7 @@ class CantoneseIMEService :
     private var predictions by mutableStateOf<List<CandidateItem>>(emptyList())
     private var isCantoneseMode by mutableStateOf(true)
     private var isWrittenMode by mutableStateOf(false)
+    private var isEnSentenceMode by mutableStateOf(false)
     private var isEngineReady by mutableStateOf(false)
 
     override fun onCreate() {
@@ -85,6 +86,7 @@ class CantoneseIMEService :
                 nativeEngine = createdEngine
                 isEngineReady = createdEngine != null
                 createdEngine?.setOutputMode(isWrittenMode)
+                createdEngine?.setEnSentenceMode(isEnSentenceMode)
                 if (inputBuffer.isNotEmpty()) {
                     refreshCompositionAndCandidates()
                 }
@@ -106,6 +108,7 @@ class CantoneseIMEService :
                     predictions = predictions,
                     isCantoneseMode = isCantoneseMode,
                     isWrittenMode = isWrittenMode,
+                    isEnSentenceMode = isEnSentenceMode,
                     isEngineReady = isEngineReady,
                     onLetterClick = ::handleLetterInput,
                     onBackspace = ::handleBackspace,
@@ -115,6 +118,7 @@ class CantoneseIMEService :
                     onPunctuationClick = ::handlePunctuationInput,
                     onToggleLanguage = ::handleToggleLanguage,
                     onToggleOutputMode = ::handleToggleOutputMode,
+                    onToggleEnSentenceMode = ::handleToggleEnSentenceMode,
                     onClearBuffer = ::clearCurrentBuffer,
                 )
             }
@@ -172,13 +176,18 @@ class CantoneseIMEService :
         nativeEngine?.clearContext()
     }
 
+    private fun isEnSentenceActive(): Boolean {
+        val trimmed = inputBuffer.trimStart()
+        return isEnSentenceMode || trimmed.startsWith(";") || trimmed.startsWith("/")
+    }
+
     private fun handleLetterInput(letter: String) {
         val ic = currentInputConnection ?: return
         if (!isCantoneseMode) {
             ic.commitText(letter, 1)
             return
         }
-        inputBuffer += letter.lowercase()
+        inputBuffer += if (isEnSentenceActive()) letter else letter.lowercase()
         refreshCompositionAndCandidates()
     }
 
@@ -208,6 +217,25 @@ class CantoneseIMEService :
 
     private fun handleSpace() {
         val ic = currentInputConnection ?: return
+        if (isCantoneseMode && isEnSentenceActive()) {
+            // 英文整句直出模式：單按空白鍵於緩衝區加入空格，連按兩下空白鍵 (Double Space) 則將第 1 順位整句上屏
+            if (inputBuffer.isNotEmpty() && inputBuffer.endsWith(" ")) {
+                val first = candidates.firstOrNull()
+                if (first != null) {
+                    handleCandidateClick(0, first)
+                } else {
+                    ic.commitText(inputBuffer.trimEnd(), 1)
+                    inputBuffer = ""
+                    segmentedPinyin = ""
+                    candidates = emptyList()
+                    nativeEngine?.clearContext()
+                }
+            } else {
+                inputBuffer += " "
+                refreshCompositionAndCandidates()
+            }
+            return
+        }
         if (isCantoneseMode && inputBuffer.isNotEmpty()) {
             val first = candidates.firstOrNull()
             if (first != null) {
@@ -232,7 +260,12 @@ class CantoneseIMEService :
     private fun handleEnter() {
         val ic = currentInputConnection ?: return
         if (isCantoneseMode && inputBuffer.isNotEmpty()) {
-            // 規範：Enter 鍵將目前原始英文字串原封不動上屏
+            if (isEnSentenceActive() && candidates.isNotEmpty()) {
+                // 英文整句直出模式：確認鍵直接將第 1 順位廣東話整句上屏
+                handleCandidateClick(0, candidates.first())
+                return
+            }
+            // 一般粵拼模式：Enter 鍵將目前原始英文字串原封不動上屏
             val raw = inputBuffer
             ic.commitText(raw, 1)
             inputBuffer = ""
@@ -263,6 +296,12 @@ class CantoneseIMEService :
 
     private fun handlePunctuationInput(punctuation: String) {
         val ic = currentInputConnection ?: return
+        // 免切換前綴：在粵拼模式下緩衝區為空時輸入 `;` 或 `/` 直接進入英譯粵整句模式
+        if (isCantoneseMode && inputBuffer.isEmpty() && (punctuation == ";" || punctuation == "/")) {
+            inputBuffer = punctuation
+            refreshCompositionAndCandidates()
+            return
+        }
         ic.beginBatchEdit()
         if (isCantoneseMode && inputBuffer.isNotEmpty()) {
             val first = candidates.firstOrNull()
@@ -330,6 +369,10 @@ class CantoneseIMEService :
             candidates = emptyList()
         }
         isCantoneseMode = !isCantoneseMode
+        if (!isCantoneseMode && isEnSentenceMode) {
+            isEnSentenceMode = false
+            nativeEngine?.setEnSentenceMode(false)
+        }
         nativeEngine?.clearContext()
         predictions = emptyList()
     }
@@ -340,6 +383,23 @@ class CantoneseIMEService :
         if (inputBuffer.isNotEmpty()) {
             refreshCompositionAndCandidates()
         }
+    }
+
+    private fun handleToggleEnSentenceMode() {
+        val ic = currentInputConnection
+        if (inputBuffer.isNotEmpty()) {
+            ic?.commitText(inputBuffer, 1)
+            inputBuffer = ""
+            segmentedPinyin = ""
+            candidates = emptyList()
+        }
+        if (!isCantoneseMode) {
+            isCantoneseMode = true
+        }
+        isEnSentenceMode = !isEnSentenceMode
+        nativeEngine?.setEnSentenceMode(isEnSentenceMode)
+        nativeEngine?.clearContext()
+        predictions = emptyList()
     }
 
     private fun clearCurrentBuffer() {

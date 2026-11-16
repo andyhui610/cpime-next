@@ -655,6 +655,10 @@ pub fn segment_syllables_with_spans(input: &str) -> Vec<SyllableSpan> {
 /// 例如 `"ngogamjatheoihoenggong"` -> `"ngo'gam'jat'heoi'hoeng'gong"`
 /// 例如 `"gamjathg"` -> `"gam'jat'h'g"`
 pub fn format_segmented_pinyin(input: &str) -> String {
+    let trimmed = input.trim_start();
+    if trimmed.starts_with(';') || trimmed.starts_with('/') || input.contains(' ') {
+        return input.to_string();
+    }
     let spans = segment_hybrid_syllables(input);
     if spans.len() < 2 {
         return input.to_string();

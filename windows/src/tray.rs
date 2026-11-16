@@ -41,6 +41,7 @@ pub const ID_TOGGLE_IME: usize = 1001;
 pub const ID_MODE_COLLOQUIAL: usize = 1002;
 pub const ID_MODE_WRITTEN: usize = 1003;
 pub const ID_RELOAD_USER_DICT: usize = 1004;
+pub const ID_MODE_EN_SENTENCE: usize = 1005;
 pub const ID_EXIT: usize = 1009;
 
 const TRAY_ICON_UID: u32 = 1;
@@ -48,12 +49,14 @@ const ICON_SIZE: i32 = 32;
 
 const BG_RGB_YUE: u32 = 0x2563EB; // 藍底白字「粵」
 const BG_RGB_WRITTEN: u32 = 0x059669; // 綠底白字「書」
+const BG_RGB_TRANS: u32 = 0x7C3AED; // 紫底白字「譯」
 const BG_RGB_ENG: u32 = 0x4B5563; // 灰底白字「英」
 
 struct TrayState {
     hwnd: HWND,
     icon_yue: HICON,
     icon_written: HICON,
+    icon_trans: HICON,
     icon_eng: HICON,
     registered: bool,
 }
@@ -64,6 +67,7 @@ thread_local! {
             hwnd: null_mut(),
             icon_yue: null_mut(),
             icon_written: null_mut(),
+            icon_trans: null_mut(),
             icon_eng: null_mut(),
             registered: false,
         })
@@ -247,7 +251,7 @@ pub fn create_text_icon(ch: &str, bg_rgb: u32) -> HICON {
     }
 }
 
-/// 根據當前中/英模式與口語/書面語模式取得對應圖示與系統列 Tooltip 文字
+/// 根據當前中/英/英譯粵整句模式與口語/書面語模式取得對應圖示與系統列 Tooltip 文字
 fn resolve_icon_and_tip(
     state: &TrayState,
     mode: ImeMode,
@@ -262,6 +266,14 @@ fn resolve_icon_and_tip(
             state.icon_written,
             "CPIME-Next 廣東話輸入法 [書·書面語]",
         ),
+        (ImeMode::EnSentence, OutputMode::Colloquial) => (
+            state.icon_trans,
+            "CPIME-Next 英文整句直出廣東話模式 [譯·口語]",
+        ),
+        (ImeMode::EnSentence, OutputMode::Written) => (
+            state.icon_trans,
+            "CPIME-Next 英文整句直出廣東話模式 [譯·書面語]",
+        ),
         (ImeMode::English, _) => (
             state.icon_eng,
             "CPIME-Next 廣東話輸入法 [英·英文模式]",
@@ -273,15 +285,19 @@ fn resolve_icon_and_tip(
 pub fn init_tray_icon(hwnd: HWND) -> Result<(), String> {
     let icon_yue = create_text_icon("粵", BG_RGB_YUE);
     let icon_written = create_text_icon("書", BG_RGB_WRITTEN);
+    let icon_trans = create_text_icon("譯", BG_RGB_TRANS);
     let icon_eng = create_text_icon("英", BG_RGB_ENG);
 
-    if icon_yue.is_null() || icon_written.is_null() || icon_eng.is_null() {
+    if icon_yue.is_null() || icon_written.is_null() || icon_trans.is_null() || icon_eng.is_null() {
         unsafe {
             if !icon_yue.is_null() {
                 DestroyIcon(icon_yue);
             }
             if !icon_written.is_null() {
                 DestroyIcon(icon_written);
+            }
+            if !icon_trans.is_null() {
+                DestroyIcon(icon_trans);
             }
             if !icon_eng.is_null() {
                 DestroyIcon(icon_eng);
@@ -303,6 +319,7 @@ pub fn init_tray_icon(hwnd: HWND) -> Result<(), String> {
         if Shell_NotifyIconW(NIM_ADD, &nid) == 0 {
             DestroyIcon(icon_yue);
             DestroyIcon(icon_written);
+            DestroyIcon(icon_trans);
             DestroyIcon(icon_eng);
             return Err("註冊 Windows 系統列圖示 (Shell_NotifyIconW NIM_ADD) 失敗".to_string());
         }
@@ -313,6 +330,7 @@ pub fn init_tray_icon(hwnd: HWND) -> Result<(), String> {
         st.hwnd = hwnd;
         st.icon_yue = icon_yue;
         st.icon_written = icon_written;
+        st.icon_trans = icon_trans;
         st.icon_eng = icon_eng;
         st.registered = true;
     });
@@ -366,6 +384,10 @@ pub fn remove_tray_icon() {
                 DestroyIcon(st.icon_written);
                 st.icon_written = null_mut();
             }
+            if !st.icon_trans.is_null() {
+                DestroyIcon(st.icon_trans);
+                st.icon_trans = null_mut();
+            }
             if !st.icon_eng.is_null() {
                 DestroyIcon(st.icon_eng);
                 st.icon_eng = null_mut();
@@ -382,7 +404,13 @@ pub unsafe fn show_tray_context_menu(hwnd: HWND, mode: ImeMode, output_mode: Out
     }
 
     let ime_flag = MF_STRING
-        | if mode == ImeMode::Cantonese {
+        | if mode != ImeMode::English {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    let en_sentence_flag = MF_STRING
+        | if mode == ImeMode::EnSentence {
             MF_CHECKED
         } else {
             MF_UNCHECKED
@@ -401,12 +429,14 @@ pub unsafe fn show_tray_context_menu(hwnd: HWND, mode: ImeMode, output_mode: Out
         };
 
     let lbl_toggle = to_wide_null("啟用廣東話輸入 (Left Shift / Ctrl+Space)");
+    let lbl_en_sentence = to_wide_null("英譯粵整句模式 (Ctrl+Shift+E / ; 前綴)");
     let lbl_colloquial = to_wide_null("口語模式 (嘅 / 喺 / 唔 / 𨋢)");
     let lbl_written = to_wide_null("書面語模式 (的 / 在 / 不 / 升降機)");
     let lbl_reload = to_wide_null("重新載入個人詞庫 (user_dict.db)");
     let lbl_exit = to_wide_null("結束 CPIME-Next");
 
     AppendMenuW(hmenu, ime_flag, ID_TOGGLE_IME, lbl_toggle.as_ptr());
+    AppendMenuW(hmenu, en_sentence_flag, ID_MODE_EN_SENTENCE, lbl_en_sentence.as_ptr());
     AppendMenuW(hmenu, MF_SEPARATOR, 0, null());
     AppendMenuW(hmenu, colloquial_flag, ID_MODE_COLLOQUIAL, lbl_colloquial.as_ptr());
     AppendMenuW(hmenu, written_flag, ID_MODE_WRITTEN, lbl_written.as_ptr());
@@ -442,16 +472,19 @@ mod tests {
     fn test_create_text_icons_in_memory() {
         let h1 = create_text_icon("粵", BG_RGB_YUE);
         let h2 = create_text_icon("書", BG_RGB_WRITTEN);
-        let h3 = create_text_icon("英", BG_RGB_ENG);
+        let h3 = create_text_icon("譯", BG_RGB_TRANS);
+        let h4 = create_text_icon("英", BG_RGB_ENG);
 
         assert!(!h1.is_null(), "應能於記憶體生成『粵』圖示");
         assert!(!h2.is_null(), "應能於記憶體生成『書』圖示");
-        assert!(!h3.is_null(), "應能於記憶體生成『英』圖示");
+        assert!(!h3.is_null(), "應能於記憶體生成『譯』圖示");
+        assert!(!h4.is_null(), "應能於記憶體生成『英』圖示");
 
         unsafe {
             DestroyIcon(h1);
             DestroyIcon(h2);
             DestroyIcon(h3);
+            DestroyIcon(h4);
         }
     }
 }

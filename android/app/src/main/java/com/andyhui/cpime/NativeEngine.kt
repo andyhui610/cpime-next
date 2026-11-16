@@ -55,6 +55,12 @@ class NativeEngine private constructor(
     }
 
     @Synchronized
+    fun setEnSentenceMode(enabled: Boolean) {
+        if (enginePtr == 0L) return
+        nativeSetEnSentenceMode(enginePtr, enabled)
+    }
+
+    @Synchronized
     fun clearContext() {
         if (enginePtr == 0L) return
         nativeClearContext(enginePtr)
@@ -143,6 +149,9 @@ class NativeEngine private constructor(
 
         @JvmStatic
         private external fun nativeSetOutputMode(enginePtr: Long, isWritten: Boolean)
+
+        @JvmStatic
+        private external fun nativeSetEnSentenceMode(enginePtr: Long, enabled: Boolean)
 
         @JvmStatic
         private external fun nativeClearContext(enginePtr: Long)

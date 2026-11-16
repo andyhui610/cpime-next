@@ -169,11 +169,40 @@ impl ImeHookState {
         Some((chosen, log_str))
     }
 
-    /// 切換「粵語模式 `[粵]`」與「英文模式 `[英]`」
+    /// 判斷目前是否處於英文整句直出廣東話輸入狀態（`ImeMode::EnSentence` 或 `;` / `/` 前綴）
+    #[inline]
+    fn is_en_sentence_active(&self) -> bool {
+        let trimmed = self.input_buffer.trim_start();
+        self.mode == ImeMode::EnSentence
+            || trimmed.starts_with(';')
+            || trimmed.starts_with('/')
+    }
+
+    /// 切換「粵語模式 `[粵]`」與「英文模式 `[英]`」（若目前為 `[譯]` 則切回 `[英]`）
     fn toggle_mode(&mut self) -> ImeMode {
         self.mode = match self.mode {
-            ImeMode::Cantonese => ImeMode::English,
+            ImeMode::Cantonese | ImeMode::EnSentence => ImeMode::English,
             ImeMode::English => ImeMode::Cantonese,
+        };
+        self.engine.set_en_sentence_mode(false);
+        self.input_buffer.clear();
+        self.candidates.clear();
+        self.current_page = 0;
+        self.engine.clear_context();
+        self.mode
+    }
+
+    /// 切換「粵語雙軌模式 `[粵]`」與「英文整句直出廣東話模式 `[譯]`」
+    fn toggle_en_sentence_mode(&mut self) -> ImeMode {
+        self.mode = match self.mode {
+            ImeMode::EnSentence => {
+                self.engine.set_en_sentence_mode(false);
+                ImeMode::Cantonese
+            }
+            ImeMode::Cantonese | ImeMode::English => {
+                self.engine.set_en_sentence_mode(true);
+                ImeMode::EnSentence
+            }
         };
         self.input_buffer.clear();
         self.candidates.clear();
@@ -241,12 +270,38 @@ pub fn toggle_ime_mode_from_ui() {
     }
 }
 
+/// 供系統列右鍵選單呼叫：切換「英文整句直出廣東話模式」
+pub fn toggle_en_sentence_mode_from_ui() {
+    let result = HOOK_STATE.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let state = borrow.as_mut()?;
+        let new_mode = state.toggle_en_sentence_mode();
+        let output_mode = state.engine.get_output_mode();
+        Some((new_mode, output_mode))
+    });
+
+    if let Some((new_mode, output_mode)) = result {
+        println!(
+            "[模式切換] 系統列 -> {}",
+            new_mode.toast_label(output_mode)
+        );
+        update_tray_icon(new_mode, output_mode);
+        update_overlay(OverlayDisplay::ModeToast {
+            mode: new_mode,
+            output_mode,
+        });
+    }
+}
+
 /// 供系統列右鍵選單呼叫：指定切換至「口語模式」或「書面語模式」
 pub fn set_output_mode_from_ui(output_mode: OutputMode) {
     let result = HOOK_STATE.with(|cell| {
         let mut borrow = cell.borrow_mut();
         let state = borrow.as_mut()?;
-        state.mode = ImeMode::Cantonese;
+        if state.mode == ImeMode::English {
+            state.mode = ImeMode::Cantonese;
+            state.engine.set_en_sentence_mode(false);
+        }
         state.engine.set_output_mode(output_mode);
         let overlay = if state.input_buffer.is_empty() {
             OverlayDisplay::ModeToast {
@@ -453,10 +508,31 @@ unsafe extern "system" fn low_level_keyboard_proc(
             };
         }
 
-        // 2b. 支援 Ctrl + Shift + S 或 F4 秒速切換「口語模式 (粵)」與「書面語模式 (書)」
+        // 2b. 支援 Ctrl + Shift + E 切換「英文整句直出廣東話模式 [譯]」
+        if ctrl_down && shift_down && !alt_down && !win_down && vk == 0x45 {
+            let new_mode = state.toggle_en_sentence_mode();
+            let output_mode = state.engine.get_output_mode();
+            if (vk as usize) < 256 {
+                state.swallowed_keys[vk as usize] = true;
+            }
+            return HookAction::Intercept {
+                overlay: Some(OverlayDisplay::ModeToast {
+                    mode: new_mode,
+                    output_mode,
+                }),
+                tray_state: Some((new_mode, output_mode)),
+                commit_text: None,
+                log_msg: Some(format!(
+                    "[模式切換] Ctrl+Shift+E -> {}",
+                    new_mode.toast_label(output_mode)
+                )),
+            };
+        }
+
+        // 2c. 支援 Ctrl + Shift + S 或 F4 秒速切換「口語模式 (粵)」與「書面語模式 (書)」
         let is_output_toggle_hotkey = (ctrl_down && shift_down && !alt_down && !win_down && vk == 0x53)
             || (!ctrl_down && !alt_down && !win_down && !shift_down && vk == VK_F4 as u32);
-        if state.mode == ImeMode::Cantonese && is_output_toggle_hotkey {
+        if state.mode != ImeMode::English && is_output_toggle_hotkey {
             let new_output_mode = state.toggle_output_mode();
             if (vk as usize) < 256 {
                 state.swallowed_keys[vk as usize] = true;
@@ -485,20 +561,47 @@ unsafe extern "system" fn low_level_keyboard_proc(
             return HookAction::PassThrough;
         }
 
-        // 4. 在「粵語模式 [粵]」下：若同時按住 Ctrl、Alt 或 Win 鍵，直接放行以保留系統快捷鍵 (Ctrl+C, Ctrl+V 等)
+        // 4. 在「粵語模式 [粵]」或「英譯粵整句模式 [譯]」下：若同時按住 Ctrl、Alt 或 Win 鍵，直接放行以保留系統快捷鍵 (Ctrl+C, Ctrl+V 等)
         if ctrl_down || alt_down || win_down {
             return HookAction::PassThrough;
         }
 
+        // 4b. 在粵拼模式下，於緩衝區為空時攔截 `;` (VK_OEM_1) 或 `/` (VK_OEM_2) 作為免切換前綴進入英譯粵整句輸入
+        if state.input_buffer.is_empty()
+            && !shift_down
+            && (vk == VK_OEM_1 as u32 || vk == VK_OEM_2 as u32)
+        {
+            let prefix_ch = if vk == VK_OEM_1 as u32 { ';' } else { '/' };
+            state.input_buffer.push(prefix_ch);
+            state.current_page = 0;
+            state.refresh_candidates();
+            if (vk as usize) < 256 {
+                state.swallowed_keys[vk as usize] = true;
+            }
+            return HookAction::Intercept {
+                overlay: Some(state.build_composing_display()),
+                tray_state: None,
+                commit_text: None,
+                log_msg: None,
+            };
+        }
+
+        let is_en_sentence = state.is_en_sentence_active();
+
         // 5. 單純按下 a-z 時攔截按鍵，將字元傳入 Engine 並觸發浮動視窗重繪
         if (0x41..=0x5A).contains(&vk) {
-            // 若目前無拼音且使用者按住 Shift + A-Z，允許直接輸入大寫英文字母
-            if shift_down && state.input_buffer.is_empty() {
+            // 若目前無緩衝區且非整句模式時按住 Shift + A-Z，允許直接輸入大寫英文字母；整句模式則一併收進句內
+            if shift_down && state.input_buffer.is_empty() && !is_en_sentence {
                 state.engine.break_sequence();
                 return HookAction::PassThrough;
             }
 
-            let ch = (vk as u8 as char).to_ascii_lowercase();
+            let raw_ch = vk as u8 as char;
+            let ch = if is_en_sentence && shift_down {
+                raw_ch.to_ascii_uppercase()
+            } else {
+                raw_ch.to_ascii_lowercase()
+            };
             state.input_buffer.push(ch);
             state.current_page = 0;
             state.refresh_candidates();
@@ -514,7 +617,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
             };
         }
 
-        // 6. 當 input_buffer 有內容時，攔截並處理選字、翻頁、修改與取消按鍵
+        // 6. 當 input_buffer 有內容時，攔截並處理選字、空格組句、翻頁、修改與取消按鍵
         if !state.input_buffer.is_empty() {
             let mark_swallowed = |st: &mut ImeHookState| {
                 if (vk as usize) < 256 {
@@ -524,9 +627,21 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
             let vkey = vk as u16;
             match vkey {
-                // Space：選當頁第 1 個候選詞呼叫 send_unicode_string 上屏
+                // Space：在整句模式下單按插入空白 `' '`，若剛已是空白尾（Double Space）或一般粵拼模式則將第 1 順位候選詞上屏
                 VK_SPACE => {
                     mark_swallowed(state);
+                    if is_en_sentence && !state.input_buffer.ends_with(' ') {
+                        state.input_buffer.push(' ');
+                        state.current_page = 0;
+                        state.refresh_candidates();
+                        return HookAction::Intercept {
+                            overlay: Some(state.build_composing_display()),
+                            tray_state: None,
+                            commit_text: None,
+                            log_msg: None,
+                        };
+                    }
+
                     let first_idx = state.current_page * PAGE_SIZE;
                     if let Some((word, log_str)) = state.commit_candidate_at(first_idx) {
                         let next_overlay = if state.input_buffer.is_empty() {
@@ -584,9 +699,28 @@ unsafe extern "system" fn low_level_keyboard_proc(
                     };
                 }
 
-                // Enter：將 input_buffer 原始英文字母直接透過 send_unicode_string 上屏
+                // Enter：
+                // - 英文整句直出模式下，優先將第 1 順位的廣東話整句上屏（無候選句時則直出原文）
+                // - 一般粵拼雙軌模式下，將 input_buffer 原始英文字母直接上屏
                 VK_RETURN => {
                     mark_swallowed(state);
+                    if is_en_sentence && !state.candidates.is_empty() {
+                        let first_idx = state.current_page * PAGE_SIZE;
+                        if let Some((word, log_str)) = state.commit_candidate_at(first_idx) {
+                            let next_overlay = if state.input_buffer.is_empty() {
+                                OverlayDisplay::Hidden
+                            } else {
+                                state.build_composing_display()
+                            };
+                            return HookAction::Intercept {
+                                overlay: Some(next_overlay),
+                                tray_state: None,
+                                commit_text: Some(word),
+                                log_msg: Some(log_str),
+                            };
+                        }
+                    }
+
                     let raw = std::mem::take(&mut state.input_buffer);
                     state.candidates.clear();
                     state.current_page = 0;
@@ -791,6 +925,24 @@ mod tests {
         let out_written = state.toggle_output_mode();
         assert_eq!(out_written, OutputMode::Written);
         assert_eq!(state.candidates[0].word, "他們");
+
+        // 5. 模擬切換「英譯粵整句模式 [譯]」與整句查詢（先切回口語模式驗證口語輸出，再測書面語）
+        assert_eq!(state.toggle_output_mode(), OutputMode::Colloquial);
+        let trans_mode = state.toggle_en_sentence_mode();
+        assert_eq!(trans_mode, ImeMode::EnSentence);
+        assert!(state.engine.is_en_sentence_mode());
+        state.input_buffer = "I go to school by bus".to_string();
+        state.refresh_candidates();
+        assert!(state.candidates.len() >= 2);
+        assert_eq!(state.candidates[0].word, "我搭巴士返學校");
+        assert_eq!(state.candidates[1].word, "我搭巴士返學");
+
+        assert_eq!(state.toggle_output_mode(), OutputMode::Written);
+        assert_eq!(state.candidates[0].word, "我乘巴士去學校");
+
+        let back_to_canto = state.toggle_en_sentence_mode();
+        assert_eq!(back_to_canto, ImeMode::Cantonese);
+        assert!(!state.engine.is_en_sentence_mode());
     }
 }
 

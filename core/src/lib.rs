@@ -1,6 +1,7 @@
 //! CPIME-Next (`cpime-core`) 跨平台粵語與英漢反查雙軌輸入法引擎核心庫
 
 pub mod decoder;
+pub mod en_sentence;
 pub mod engine;
 pub mod jni_bridge;
 pub mod phonetics;
@@ -8,7 +9,8 @@ pub mod phrase_composer;
 pub mod user_dict;
 
 pub use decoder::{DecodedSentence, LatticeWord, SentenceDecoder};
-pub use engine::{Candidate, CandidateSource, CpimeEngine, Engine, OutputMode};
+pub use en_sentence::{is_en_sentence_trigger, translate_en_sentence, EnSentenceTranslator};
+pub use engine::{Candidate, CandidateSource, CpimeEngine, Engine, InputMode, OutputMode};
 pub use phonetics::{
     expand_phonetic_queries, format_segmented_pinyin, normalize_to_jyutping, sanitize_input,
     segment_hybrid_syllables, segment_syllables_with_spans, PhoneticQuery, SyllableKind,

@@ -235,6 +235,21 @@ pub extern "system" fn Java_com_andyhui_cpime_NativeEngine_nativeSetOutputMode(
     }
 }
 
+/// 切換英文整句直出廣東話模式（`true` = 啟用整句模式，`false` = 一般粵拼雙軌模式）
+#[no_mangle]
+pub extern "system" fn Java_com_andyhui_cpime_NativeEngine_nativeSetEnSentenceMode(
+    _env: JNIEnv,
+    _class: JClass,
+    engine_ptr: jlong,
+    enabled: jboolean,
+) {
+    unsafe {
+        if let Some(engine) = engine_mut(engine_ptr) {
+            engine.set_en_sentence_mode(enabled != JNI_FALSE);
+        }
+    }
+}
+
 /// 清空當前上下文並結算自造詞緩衝區
 #[no_mangle]
 pub extern "system" fn Java_com_andyhui_cpime_NativeEngine_nativeClearContext(
@@ -322,6 +337,16 @@ pub extern "system" fn Java_com_andyhui_cpime_NativeEngine_setOutputMode(
     is_written: jboolean,
 ) {
     Java_com_andyhui_cpime_NativeEngine_nativeSetOutputMode(env, class, engine_ptr, is_written);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_andyhui_cpime_NativeEngine_setEnSentenceMode(
+    env: JNIEnv,
+    class: JClass,
+    engine_ptr: jlong,
+    enabled: jboolean,
+) {
+    Java_com_andyhui_cpime_NativeEngine_nativeSetEnSentenceMode(env, class, engine_ptr, enabled);
 }
 
 #[no_mangle]

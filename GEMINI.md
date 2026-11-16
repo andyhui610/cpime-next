@@ -134,5 +134,21 @@
    - 每個 `Full` 音節加 `+1200` 分，每個 `Abbr` 音節加 `+300` 分，保留多字詞跨度平方獎勵 `((j - i)^2 * 3500) - 2000`、`user_bigrams` `+6000` 轉移加分與常見高頻語法搭配調整。
    - 所有候選詞之 `consumed_chars` 精確對應原始輸入字元偏移，支援在簡拼與混合長句中執行「剝洋蔥式部分選字（Partial Commit）」。
 
+## 11. English Sentence to Cantonese Mode (英文整句直出廣東話模式規範)
+1. **核心引擎 (`/core/src/en_sentence.rs` - `EnSentenceTranslator`)**：
+   - 內建結構化「港式英文片語與語法槽位字典（Slot Grammar Lexicon）」，透過最長片語優先匹配（Longest Phrase Matching）將輸入 Token 歸類至 `[Subject]`、`[Time]`、`[Negation/Aux]`、`[With_Modifier]`、`[Transport_Modifier]`、`[Place_Modifier]`、`[Action_Verb_Object]`、`[Particle]` 槽位。
+   - **語序重組規則**：將英文置後的介詞片語（伴隨 `with ...`、交通工具 `by ...`/`on foot`、地點 `at ...`/`in ...`）與時間狀語自動搬移至核心動詞前，依道地廣東話語序 **`[Subject] + [Time] + [Negation/Aux] + [With] + [Transport] + [Place] + [Action] + [Particle]`** 組裝整句。
+   - **雙語體與時態處理**：
+     * 支援 `OutputMode::Colloquial`（預設，如 `"我搭巴士返學校"`、`"我搭巴士返學"`）與 `OutputMode::Written`（如 `"我乘巴士去學校"`、`"我坐巴士上學"`）。
+     * 支援進行式（`am/is/are ...ing` -> `喺度...緊` / `...緊`）、過去式或含 `already`/`yesterday` 自動補 `咗`（書面補 `了`），以及常見寒暄疑問句（如 `how much is it`、`where are you`、`what time is it`、`thank you very much`、`wait a minute`）。
+     * 未知一般動詞與受詞退回查詢 `english_dict` 單字表進行動賓組裝（如 `eat apple` -> `食蘋果`、`drink coffee` -> `飲咖啡`），並將原始英文句子保留於候選清單後方。
+2. **雙觸發機制與模式切換**：
+   - **獨立開關 (`EnSentenceMode`)**：在 `Engine`（`InputMode::EnSentence` / `en_sentence_mode`）啟用後，允許 `input_buffer` 接收空白字元 `' '` 並直接執行英文整句翻譯。
+   - **免切換前綴 (`;` 或 `/`)**：在一般粵拼模式下，只要輸入以 `;` 或 `/` 開頭（如 `;I go to school by bus`），或包含空格的英文句子，自動視同觸發英文整句直出廣東話模式。
+3. **跨平台前端支援**：
+   - **Windows (`/windows`)**：支援 `Ctrl + Shift + E` 快捷鍵與右鍵選單「英譯粵整句模式」，系統列顯示紫底白字 **`「譯」`** 圖示；整句模式下單次 `Space` 插入空白字元、連按兩次 `Space`（Double Space）或按 `Enter` / `1~9` 將對應候選整句上屏。
+   - **Android (`/android`)**：軟鍵盤工具列新增 **`[譯]`** 切換按鈕；點亮時空白鍵於緩衝區加入 `' '`（連按兩下空白鍵可上屏首選句），候選詞列即時顯示廣東話整句，點擊候選句或確認鍵即可整句上屏。
+
+
 
 
