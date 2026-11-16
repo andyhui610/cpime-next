@@ -134,6 +134,8 @@ def get_Cantonese_seed_data() -> list[tuple[str, str, str, str, int]]:
         ("去", "heoi", "heoi3", "h", 9800),
         ("喺度", "haidou", "hai2 dou6", "hd", 9600),
         ("度", "dou", "dou6", "d", 9000),
+        ("嗎", "maa", "maa3", "m", 9600),
+        ("你好嗎", "neihoumaa", "nei5 hou2 maa3", "nhm", 9500),
     ]
     return raw_entries
 
@@ -193,6 +195,12 @@ def get_english_seed_data() -> list[tuple[str, str, int, int]]:
         ("work", "工作", 0, 9900),
         ("phone", "電話", 0, 10000),
         ("computer", "電腦", 0, 10000),
+        ("eat", "食", 1, 10000),
+        ("eat", "吃", 0, 9900),
+        ("drink", "飲", 1, 10000),
+        ("drink", "喝", 0, 9900),
+        ("buy", "買", 0, 10000),
+        ("school", "學校", 0, 10000),
     ]
     return raw_entries
 
