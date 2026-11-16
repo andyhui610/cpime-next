@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/branding/cpime-logo-1024.png" alt="CPIME-Next Logo" width="160">
+</p>
+
 # CPIME-Next
 
 **跨平台現代化廣東話及英漢反查雙軌輸入法**  
