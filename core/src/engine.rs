@@ -11,7 +11,8 @@ use rusqlite::{params, Connection, OpenFlags, Result as SqlResult};
 
 use crate::decoder::SentenceDecoder;
 use crate::phonetics::{
-    expand_phonetic_queries, normalize_to_jyutping, sanitize_input, segment_syllables_with_spans,
+    expand_phonetic_queries, normalize_to_jyutping, sanitize_input, segment_hybrid_syllables,
+    SyllableKind,
 };
 use crate::phrase_composer::{PhraseComposer, PhraseCompositionEvent};
 use crate::user_dict::UserDict;
@@ -79,6 +80,8 @@ struct CantoneseTrackResult {
     has_exact_or_normalized_full: bool,
     /// 是否有任何完整音節匹配（含懶音容錯）
     has_any_full_syllable: bool,
+    /// 是否有高頻簡拼直接命中（如 `hg` -> 香港、`nh` -> 你好，避免 2 字母簡拼被低頻英語縮寫覆蓋）
+    has_strong_abbr_match: bool,
 }
 
 /// 英文反查軌內部查詢結果摘要
@@ -202,6 +205,7 @@ impl CpimeEngine {
         };
         let _ = engine.lookup_with_limit("sun", 1);
         let _ = engine.lookup_with_limit("aftern", 1);
+        let _ = engine.lookup_with_limit("gamjat", 1);
         Ok(engine)
     }
 
@@ -284,7 +288,7 @@ impl CpimeEngine {
         let is_short_collision =
             cleaned.len() <= 4 && canto_res.has_any_full_syllable && eng_res.has_exact_match;
         let is_pure_or_long_english = !eng_res.candidates.is_empty()
-            && (!canto_res.has_any_full_syllable
+            && ((!canto_res.has_any_full_syllable && !canto_res.has_strong_abbr_match)
                 || (cleaned.len() >= 5 && !canto_res.has_exact_or_normalized_full));
 
         // 先保留較寬的雙軌候選池，避免排名較後的系統候選詞在加權前被截斷
@@ -301,7 +305,7 @@ impl CpimeEngine {
 
         // 英文長單字與短碼撞碼保護：維持原本雙軌排序，不拆解為粵語長句
         if !is_short_collision && !is_pure_or_long_english {
-            let syllables = segment_syllables_with_spans(raw_input);
+            let syllables = segment_hybrid_syllables(raw_input);
             if syllables.len() >= 2 {
                 let has_whole_word_match = has_canto_full_or_fuzzy
                     || candidates.iter().any(|c| {
@@ -310,6 +314,23 @@ impl CpimeEngine {
                             CandidateSource::UserCustom | CandidateSource::BigramContext
                         )
                     });
+                let has_abbr_node = syllables
+                    .iter()
+                    .any(|s| matches!(s.kind, SyllableKind::Abbr(_)));
+                let has_full_node = syllables
+                    .iter()
+                    .any(|s| matches!(s.kind, SyllableKind::Full(_)));
+                let is_hybrid_two_syllable =
+                    syllables.len() == 2 && has_abbr_node && has_full_node;
+
+                // 若為 2 音節以上且非「只有一個 2 音節非混合完整命中且同時不需要前綴」（如在一般單詞查詢中需要前綴，但對只有 2 音節的 `gamjat` 等仍可快取）
+                // 這裡當 `syllables.len() == 2 && has_whole_word_match && !is_hybrid_two_syllable` 且已有足夠候選時，可省略額外字詞圖 SQL 查詢以維持 <1ms 極速；
+                // 但須注意 `gamjattingjat` (4音節) 會完整進入 `SentenceDecoder`。
+                // 同時對於 `SentenceDecoder` 內部僅在 `abbr_keys` 非空時才查詢簡拼池。
+                if has_whole_word_match && syllables.len() == 2 && !is_hybrid_two_syllable {
+                    candidates.truncate(limit);
+                    return candidates;
+                }
 
                 if let Some(decoded) = SentenceDecoder::decode(
                     &self.conn,
@@ -319,11 +340,16 @@ impl CpimeEngine {
                     raw_input,
                     &syllables,
                 ) {
-                    let mut combined = Vec::with_capacity(limit.max(decoded.prefix_candidates.len() + 4));
+                    let mut combined =
+                        Vec::with_capacity(limit.max(decoded.prefix_candidates.len() + 4));
                     let mut seen_words = HashSet::new();
 
-                    if !has_whole_word_match && syllables.len() >= 3 {
-                        // 情況 B1：3 音節以上多詞連打長句，將 Viterbi 解碼整句置於第 1 順位，第 2~9 位放開頭前綴詞/單字
+                    if !has_whole_word_match
+                        && (syllables.len() >= 3
+                            || (is_hybrid_two_syllable && decoded.is_single_whole_word))
+                    {
+                        // 情況 B1：3 音節以上多詞連打長句（含全拼、混合與純簡拼），或 2 音節混合整詞命中，
+                        // 將 Viterbi 解碼結果置於第 1 順位，第 2~9 位放開頭前綴詞/單字
                         let sentence_cand = Candidate {
                             word: decoded.full_sentence.clone(),
                             matched_code: decoded.matched_code,
@@ -571,6 +597,7 @@ impl CpimeEngine {
         let mut raw_candidates: Vec<Candidate> = Vec::new();
         let mut has_exact_or_normalized_full = false;
         let mut has_any_full_syllable = false;
+        let mut has_strong_abbr_match = false;
 
         // 1. 展開多拼音正規化 + 懶音容錯變體，查詢無聲調全拼 (toneless) 並取出原聲調 (jyutping_toned)
         let expanded_queries = expand_phonetic_queries(cleaned);
@@ -644,6 +671,9 @@ impl CpimeEngine {
                 ))
             }) {
                 for (word, toned_jp, freq) in rows.flatten() {
+                    if freq >= 8_000 {
+                        has_strong_abbr_match = true;
+                    }
                     raw_candidates.push(Candidate {
                         word,
                         matched_code: toned_jp,
@@ -721,6 +751,7 @@ impl CpimeEngine {
             candidates: deduped,
             has_exact_or_normalized_full,
             has_any_full_syllable,
+            has_strong_abbr_match,
         }
     }
 
@@ -844,7 +875,7 @@ impl CpimeEngine {
             cleaned.len() <= 4 && canto_res.has_any_full_syllable && eng_res.has_exact_match;
 
         let is_pure_or_long_english = !eng_res.candidates.is_empty()
-            && (!canto_res.has_any_full_syllable
+            && ((!canto_res.has_any_full_syllable && !canto_res.has_strong_abbr_match)
                 || (cleaned.len() >= 5 && !canto_res.has_exact_or_normalized_full));
 
         if is_short_collision {

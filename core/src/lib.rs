@@ -11,7 +11,8 @@ pub use decoder::{DecodedSentence, LatticeWord, SentenceDecoder};
 pub use engine::{Candidate, CandidateSource, CpimeEngine, Engine, OutputMode};
 pub use phonetics::{
     expand_phonetic_queries, format_segmented_pinyin, normalize_to_jyutping, sanitize_input,
-    segment_syllables_with_spans, PhoneticQuery, PrefixSyllable, SyllableKind, SyllableSpan,
+    segment_hybrid_syllables, segment_syllables_with_spans, PhoneticQuery, SyllableKind,
+    SyllableSpan,
 };
 pub use phrase_composer::{
     is_cantonese_stopword, CharToken, PhraseComposer, PhraseCompositionEvent, CANTONESE_STOPWORDS,

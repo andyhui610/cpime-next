@@ -318,16 +318,14 @@ fn expand_fuzzy_syllable(jp: &str) -> Vec<String> {
     all_variants.into_iter().filter(|x| x != jp).collect()
 }
 
-/// 音節切分節點類型
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 音節切分節點類型（全拼音節或聲母簡拼節點）
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyllableKind {
     /// 完整粵拼音節（含標準粵拼與多制式正規化）
-    FullSyllable,
-    /// 尾端未完成的聲母或前綴音節（如 "gamjath" 尾端的 "h"）
-    PrefixSyllable,
+    Full(String),
+    /// 聲母簡拼節點（含單字母聲母與正規化後之複合聲母）
+    Abbr(String),
 }
-
-pub use SyllableKind::PrefixSyllable;
 
 /// 單一音節在原始輸入字串中的跨度與正規化結果
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,11 +334,13 @@ pub struct SyllableSpan {
     pub start_byte: usize,
     /// 在原始 input 中的結束位元組索引 (exclusive)
     pub end_byte: usize,
-    /// 正規化後的標準無聲調粵拼（若為 PrefixSyllable 則為聲母/前綴）
+    /// 正規化後的無聲調粵拼或聲母簡拼字串
     pub normalized_jyutping: String,
-    /// 音節類型（完整音節 FullSyllable 或尾端未完成聲母 PrefixSyllable）
+    /// 音節類型：`Full(String)` 或 `Abbr(String)`
     pub kind: SyllableKind,
-    /// 是否為尾端未完成的聲母前綴
+    /// 該音節對應的首字母（供簡拼索引 `idx_yue_abbr` 查詢）
+    pub abbr_char: char,
+    /// 是否為簡拼/前綴節點（相容欄位，`matches!(kind, SyllableKind::Abbr(_))`）
     pub is_prefix: bool,
 }
 
@@ -351,10 +351,9 @@ impl SyllableSpan {
     }
 }
 
-/// 合法粵拼聲母表（含標準粵拼與教院/耶魯/劉錫祥聲母）
-const VALID_INITIALS: &[&str] = &[
-    "b", "c", "ch", "d", "dz", "f", "g", "gw", "h", "j", "k", "kw", "l", "m", "n", "ng", "p", "s",
-    "sh", "t", "ts", "w", "y", "z",
+/// 合法粵拼單字母子音聲母表（含耶魯/劉錫祥之 y 聲母）
+const VALID_SINGLE_CONSONANT_INITIALS: &[char] = &[
+    'b', 'c', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'p', 's', 't', 'w', 'y', 'z',
 ];
 
 /// 標準無聲調粵拼單音節總表（嚴格依字典序排列以供 `binary_search` 使用）
@@ -391,7 +390,7 @@ const STANDARD_JYUTPING_SYLLABLES: &[&str] = &[
     "la", "laa", "laai", "laak", "laam", "laan", "laang", "laap", "laat", "laau", "lai", "lak",
     "lam", "lan", "lang", "lap", "lat", "lau", "le", "lei", "lek", "lem", "leng", "leoi", "leon",
     "leot", "leu", "li", "lik", "lim", "lin", "ling", "lip", "lit", "liu", "lo", "loe", "loek",
-    "loeng", "loi", "lok", "long", "lou", "lu", "luk", "lung", "lyun", "lyut", "m", "maa", "maai",
+    "loeng", "loi", "lok", "long", "lou", "lu", "luk", "lung", "lyun", "lyut", "m", "ma", "maa", "maai",
     "maak", "maan", "maang", "maat", "maau", "mai", "mak", "mam", "man", "mang", "mat", "mau", "me",
     "mei", "meng", "meu", "mi", "mik", "min", "ming", "mit", "miu", "mo", "mok", "mong", "mou",
     "mui", "muk", "mun", "mung", "mut", "naa", "naai", "naam", "naan", "naap", "naat", "naau",
@@ -423,19 +422,26 @@ pub fn is_standard_jyutping_syllable(s: &str) -> bool {
     STANDARD_JYUTPING_SYLLABLES.binary_search(&s).is_ok()
 }
 
-/// 判斷字串是否可作為某個標準粵拼音節的前綴或合法聲母
-fn is_jyutping_prefix_or_initial(s: &str) -> bool {
-    if s.is_empty() || s.len() > 5 {
-        return false;
+/// 判斷音節字串是否包含標準粵拼母音（用於避免純子音 `"hm"`, `"hng"`, `"m"`, `"ng"` 在混合切分時誤吞相鄰聲母）
+#[inline]
+fn contains_vowel(s: &str) -> bool {
+    s.bytes().any(|b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
+}
+
+/// 從標準化粵拼或聲母字串擷取首字母（若為多制式聲母則先正規化為標準粵拼首字母）
+#[inline]
+pub fn extract_initial_abbr_char(syl: &str) -> char {
+    if syl.starts_with("ch") || syl.starts_with("ts") {
+        'c'
+    } else if syl.starts_with("sh") {
+        's'
+    } else if syl.starts_with("dz") {
+        'z'
+    } else if syl.starts_with('y') {
+        'j'
+    } else {
+        syl.chars().next().unwrap_or(' ')
     }
-    if VALID_INITIALS.contains(&s) {
-        return true;
-    }
-    // 使用二分搜尋快速檢查標準粵拼音節表中是否存在以 s 為前綴的音節
-    let idx = STANDARD_JYUTPING_SYLLABLES.partition_point(|&item| item < s);
-    STANDARD_JYUTPING_SYLLABLES
-        .get(idx)
-        .is_some_and(|&item| item.starts_with(s))
 }
 
 /// 針對單一粵拼音節計算偏好加權，避免將閉音節拆成罕用開音節 + 零聲母
@@ -445,7 +451,7 @@ fn syllable_preference_bonus(syl: &str) -> i32 {
     }
     if matches!(
         syl,
-        "ga" | "la" | "bi" | "ti" | "pi" | "de" | "ke" | "be" | "fe" | "pe" | "we" | "hoe"
+        "ga" | "la" | "ma" | "bi" | "ti" | "pi" | "de" | "ke" | "be" | "fe" | "pe" | "we" | "hoe"
             | "coe" | "doe" | "goe" | "joe" | "koe" | "loe" | "soe" | "toe" | "zoe" | "hm"
             | "hng" | "it" | "et" | "eu"
     ) {
@@ -477,9 +483,12 @@ fn match_syllable_variant(raw_slice: &str) -> Option<(String, i32)> {
     None
 }
 
-/// 將連續無空格粵拼字串（如 `"ngogamjatheoihoenggong"` 或含尾端未完成聲母的 `"gamjath"`）
-/// 切分為最佳音節序列及其在原始 `input` 中的 `(start_byte, end_byte, normalized_jyutping)` 索引位置
-pub fn segment_syllables_with_spans(input: &str) -> Vec<SyllableSpan> {
+/// 雙態混合音節切分器：在一段連續輸入中混合切出 `Full`（全拼音節）與 `Abbr`（聲母簡拼）節點
+/// - 相容標準粵拼及教院/耶魯/劉錫祥聲母正規化（如 `ch->c`, `sh->s`, `ts->c`, `dz->z`, `y->j`）
+/// - 例：`"gamjathg"` -> `[Full("gam"), Full("jat"), Abbr("h"), Abbr("g")]`
+/// - 例：`"ngogjhhg"` -> `[Full("ngo"), Abbr("g"), Abbr("j"), Abbr("h"), Abbr("h"), Abbr("g")]`
+/// - 例：`"nhma"` -> `[Abbr("n"), Abbr("h"), Full("ma")]`
+pub fn segment_hybrid_syllables(input: &str) -> Vec<SyllableSpan> {
     let mut letters: Vec<(usize, usize, char)> = Vec::with_capacity(input.len());
     for (byte_idx, ch) in input.char_indices() {
         if ch.is_ascii_alphabetic() {
@@ -503,8 +512,8 @@ pub fn segment_syllables_with_spans(input: &str) -> Vec<SyllableSpan> {
     struct DpNode {
         score: i32,
         prev: usize,
-        jyutping: String,
         kind: SyllableKind,
+        normalized: String,
     }
 
     let neg_inf = i32::MIN / 4;
@@ -512,8 +521,8 @@ pub fn segment_syllables_with_spans(input: &str) -> Vec<SyllableSpan> {
     dp[0] = Some(DpNode {
         score: 0,
         prev: 0,
-        jyutping: String::new(),
-        kind: SyllableKind::FullSyllable,
+        kind: SyllableKind::Full(String::new()),
+        normalized: String::new(),
     });
 
     for start in 0..n {
@@ -524,13 +533,20 @@ pub fn segment_syllables_with_spans(input: &str) -> Vec<SyllableSpan> {
             continue;
         }
 
-        // 1. 嘗試匹配長度 1..=6 的完整標準/正規化粵拼音節
+        // 1. 嘗試匹配長度 1..=6 的完整含母音粵拼音節 (Full)
         let max_end = (start + 6).min(n);
         for end in (start + 1)..=max_end {
             let slice = &cleaned[start..end];
+            if !contains_vowel(slice) {
+                continue;
+            }
             if let Some((norm_jp, bonus)) = match_syllable_variant(slice) {
                 let len = (end - start) as i32;
-                let step_score = -5000 + (len * 120) + bonus;
+                let step_score = if len == 1 {
+                    -4200 + bonus
+                } else {
+                    -2000 + (len * 800) + bonus
+                };
                 let candidate_score = prev_score + step_score;
 
                 let replace = match &dp[end] {
@@ -538,47 +554,66 @@ pub fn segment_syllables_with_spans(input: &str) -> Vec<SyllableSpan> {
                     Some(existing) => {
                         candidate_score > existing.score
                             || (candidate_score == existing.score
-                                && existing.kind == SyllableKind::PrefixSyllable)
+                                && matches!(existing.kind, SyllableKind::Abbr(_)))
                     }
                 };
                 if replace {
                     dp[end] = Some(DpNode {
                         score: candidate_score,
                         prev: start,
-                        jyutping: norm_jp,
-                        kind: SyllableKind::FullSyllable,
+                        kind: SyllableKind::Full(norm_jp.clone()),
+                        normalized: norm_jp,
                     });
                 }
             }
         }
 
-        // 2. 僅在字串最尾端（n - start <= 4）允許將未完成的聲母或音節前綴識別為 PrefixSyllable
-        let rem = n - start;
-        if rem <= 4 {
-            let tail = &cleaned[start..n];
-            if is_jyutping_prefix_or_initial(tail) {
-                let step_score = -7500 + (rem as i32 * 50);
-                let candidate_score = prev_score + step_score;
-                let replace = match &dp[n] {
+        // 2. 嘗試匹配多制式雙字母複合聲母簡拼 (ch/ts/sh/dz -> c/s/z)
+        if start + 2 <= n {
+            let di = &cleaned[start..start + 2];
+            let norm_di = match di {
+                "ch" | "ts" => Some("c"),
+                "sh" => Some("s"),
+                "dz" => Some("z"),
+                _ => None,
+            };
+            if let Some(norm) = norm_di {
+                let end = start + 2;
+                let candidate_score = prev_score - 4200;
+                let replace = match &dp[end] {
                     None => true,
                     Some(existing) => candidate_score > existing.score,
                 };
                 if replace {
-                    // 若為教院/耶魯複合聲母（如 ch/sh/ts/dz/y），正規化其聲母供簡拼查詢
-                    let norm_prefix = match tail {
-                        "ch" | "ts" => "c".to_string(),
-                        "sh" => "s".to_string(),
-                        "dz" => "z".to_string(),
-                        "y" => "j".to_string(),
-                        _ => tail.to_string(),
-                    };
-                    dp[n] = Some(DpNode {
+                    let norm_str = norm.to_string();
+                    dp[end] = Some(DpNode {
                         score: candidate_score,
                         prev: start,
-                        jyutping: norm_prefix,
-                        kind: SyllableKind::PrefixSyllable,
+                        kind: SyllableKind::Abbr(norm_str.clone()),
+                        normalized: norm_str,
                     });
                 }
+            }
+        }
+
+        // 3. 嘗試匹配單字母子音聲母簡拼 (Abbr)
+        let ch = cleaned.as_bytes()[start] as char;
+        if VALID_SINGLE_CONSONANT_INITIALS.contains(&ch) {
+            let end = start + 1;
+            let norm_ch = if ch == 'y' { 'j' } else { ch };
+            let candidate_score = prev_score - 4500;
+            let replace = match &dp[end] {
+                None => true,
+                Some(existing) => candidate_score > existing.score,
+            };
+            if replace {
+                let norm_str = norm_ch.to_string();
+                dp[end] = Some(DpNode {
+                    score: candidate_score,
+                    prev: start,
+                    kind: SyllableKind::Abbr(norm_str.clone()),
+                    normalized: norm_str,
+                });
             }
         }
     }
@@ -595,12 +630,14 @@ pub fn segment_syllables_with_spans(input: &str) -> Vec<SyllableSpan> {
         };
         let start_byte = letters[node.prev].0;
         let end_byte = letters[cur - 1].1;
-        let is_prefix = node.kind == SyllableKind::PrefixSyllable;
+        let abbr_char = extract_initial_abbr_char(&node.normalized);
+        let is_prefix = matches!(node.kind, SyllableKind::Abbr(_));
         spans.push(SyllableSpan {
             start_byte,
             end_byte,
-            normalized_jyutping: node.jyutping.clone(),
-            kind: node.kind,
+            normalized_jyutping: node.normalized.clone(),
+            kind: node.kind.clone(),
+            abbr_char,
             is_prefix,
         });
         cur = node.prev;
@@ -609,10 +646,16 @@ pub fn segment_syllables_with_spans(input: &str) -> Vec<SyllableSpan> {
     spans
 }
 
+/// 將連續無空格粵拼字串切分為混合音節序列（委派至 `segment_hybrid_syllables`）
+pub fn segment_syllables_with_spans(input: &str) -> Vec<SyllableSpan> {
+    segment_hybrid_syllables(input)
+}
+
 /// 將連續無空格粵拼字串格式化為帶單引號分隔的音節字串（供 UI 頂部清晰顯示）
 /// 例如 `"ngogamjatheoihoenggong"` -> `"ngo'gam'jat'heoi'hoeng'gong"`
+/// 例如 `"gamjathg"` -> `"gam'jat'h'g"`
 pub fn format_segmented_pinyin(input: &str) -> String {
-    let spans = segment_syllables_with_spans(input);
+    let spans = segment_hybrid_syllables(input);
     if spans.len() < 2 {
         return input.to_string();
     }

@@ -117,5 +117,22 @@
    - **候選詞橫向捲動列（Candidate Row）**：使用 `LazyRow` 顯示候選詞（第 1 順位高亮顯示，英文反查詞附小字提示），支援點擊候選詞觸發「整句上屏」或「剝洋蔥式部分選字（Partial Commit）」。當未輸入拼音時，顯示 Bigram 聯想詞。
    - **鍵盤主體（QWERTY 26 鍵 + 廣東話標點列）**：支援震動回饋（Haptic Feedback）、長按退格鍵連續刪除、空白鍵選首詞上屏、`Enter` 鍵送出原始英文字串。
 
+## 10. Hybrid Full/Abbreviated Sentence Decoding (全拼與簡拼混合長句連打規範)
+1. **雙態音節切分（Dual-Mode Hybrid Syllable Segmentation, `/core/src/phonetics.rs`）**：
+   - 定義 `SyllableKind`: `Full(String)`（完整標準/正規化粵拼音節）與 `Abbr(String)`（聲母簡拼節點），並在 `SyllableSpan` 中記錄 `kind`、`abbr_char`（首字母）與原始字串 `(start_byte, end_byte)`。
+   - `segment_hybrid_syllables(input: &str) -> Vec<SyllableSpan>` 支援在連續無空格輸入中混合切分全拼與簡拼（並相容 `ch->c`、`sh->s`、`ts->c`、`dz->z`、`y->j` 等多制式正規化）：
+     * `"gamjathg"` -> `[Full("gam"), Full("jat"), Abbr("h"), Abbr("g")]`（顯示為 `"gam'jat'h'g"`）
+     * `"ngogjhhg"` -> `[Full("ngo"), Abbr("g"), Abbr("j"), Abbr("h"), Abbr("h"), Abbr("g")]`（顯示為 `"ngo'g'j'h'h'g"`）
+     * `"nhma"` -> `[Abbr("n"), Abbr("h"), Full("ma")]`
+   - 若出現純簡拼 `"ng"` 歧義（如 `"ngjhhg"` 開頭的 `"ng"`），詞圖展開同時支援單一音節 `"ng"`（或 `"ngo"`）與雙簡拼 `"n" + "g"`。
+2. **簡拼錨點混合檢索（Abbreviation-Anchored Hybrid Lattice Lookup, `/core/src/decoder.rs`）**：
+   - **情況 A（全為 `Full` 音節）**：直接拼接 `toneless_key` 批次查詢 `idx_yue_toneless`、`user_unigrams` 與書面語映射表。
+   - **情況 B（全為 `Abbr` 音節且跨度 `>= 2`）**：拼接首字母 `abbr_key`（如 `"hg"`、`"gj"`）查詢 `cantonese_dict (WHERE abbr = ?)` 與 `user_unigrams (WHERE abbr_code = ?)`；對於 3 字以上純簡拼詞條過濾冷門長詞碰撞，並對 `"ng"` 展開單音節歧義支援。
+   - **情況 C（`Full` + `Abbr` 混合區間）**：先以各音節 `abbr_char` 拼接 `abbr_key` 透過 `idx_yue_abbr` 撈取前 50 筆候選詞，再於 Rust 記憶體中剝除 `jyutping_toned` 聲調，驗證所有 `Full` 音節索引位置的拼音（含多制式正規化與模糊音容錯）皆完全吻合。
+   - **情況 D（單一 `Abbr` 音節 `[i..i+1]`）**：查詢 `WHERE abbr = ? AND length(zh_word) = 1` 的最高頻單字（如 `"n"` -> 「你/我」，`"h"` -> 「喺/係/好/去」）作為單字節點保底。
+3. **Viterbi 計分更新與混合步進選字**：
+   - 每個 `Full` 音節加 `+1200` 分，每個 `Abbr` 音節加 `+300` 分，保留多字詞跨度平方獎勵 `((j - i)^2 * 3500) - 2000`、`user_bigrams` `+6000` 轉移加分與常見高頻語法搭配調整。
+   - 所有候選詞之 `consumed_chars` 精確對應原始輸入字元偏移，支援在簡拼與混合長句中執行「剝洋蔥式部分選字（Partial Commit）」。
+
 
 
